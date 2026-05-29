@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Reports and backtest output (large, generated)
+reports/
+
+# State files (runtime, not source)
+state.json
+
+# OS
+.DS_Store
+
+# pytest cache
+.pytest_cache/
+.coverage

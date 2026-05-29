@@ -1,0 +1,118 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import yaml
+
+from .models import BotConfig
+
+
+def load_config(path: str) -> BotConfig:
+    """Load YAML config file and return a validated BotConfig."""
+    raw = yaml.safe_load(Path(path).read_text())
+    cfg = BotConfig(**raw)
+    validate_config(cfg)
+    return cfg
+
+
+def validate_config(cfg: BotConfig) -> None:
+    """
+    Enforce all 9 validation rules from Section 5.1.
+    Raises ValueError on any violation.
+    """
+    bot      = cfg.bot
+    thesis   = cfg.thesis
+    capital  = cfg.capital
+    add      = cfg.add
+    data_cfg = cfg.data
+    event    = cfg.event_risk
+    tp       = cfg.take_profit
+
+    # Rule 1: bot.mode must equal "paper"
+    if bot.get("mode") != "paper":
+        raise ValueError(
+            f"bot.mode must be 'paper' (got '{bot.get('mode')}') — "
+            "live trading is not supported in v0.1"
+        )
+
+    # Rule 2: thesis.event_date must be a valid ISO date when event_risk.enabled
+    if event.get("enabled", False):
+        event_date_raw = thesis.get("event_date")
+        if not event_date_raw:
+            raise ValueError(
+                "thesis.event_date is required when event_risk.enabled = true"
+            )
+        try:
+            from datetime import date
+            date.fromisoformat(str(event_date_raw))
+        except (ValueError, TypeError):
+            raise ValueError(
+                f"thesis.event_date must be a valid ISO date string (got '{event_date_raw}')"
+            )
+
+    # Rule 3: thesis.target_price must be > 0
+    target_price = thesis.get("target_price")
+    if target_price is None or target_price <= 0:
+        raise ValueError(
+            f"thesis.target_price must be > 0 (got '{target_price}')"
+        )
+
+    # Rule 4: add.add_sizes_pct must have exactly add.max_add_count elements
+    max_add_count = add.get("max_add_count")
+    add_sizes_pct = add.get("add_sizes_pct", [])
+    if len(add_sizes_pct) != max_add_count:
+        raise ValueError(
+            f"add.add_sizes_pct must have exactly {max_add_count} elements "
+            f"(got {len(add_sizes_pct)})"
+        )
+
+    # Rule 5: All exposure percentages must be in range (0.0, 1.0]
+    exposure_fields = [
+        ("capital.max_total_capital_at_risk_pct", capital.get("max_total_capital_at_risk_pct")),
+        ("capital.max_symbol_exposure_pct",        capital.get("max_symbol_exposure_pct")),
+        ("capital.max_initial_exposure_pct",        capital.get("max_initial_exposure_pct")),
+        ("capital.max_starter_exposure_pct",        capital.get("max_starter_exposure_pct")),
+        ("capital.max_addon_exposure_pct",          capital.get("max_addon_exposure_pct")),
+        ("capital.reserve_cash_pct",                capital.get("reserve_cash_pct")),
+    ]
+    for field_name, val in exposure_fields:
+        if val is not None and not (0.0 < val <= 1.0):
+            raise ValueError(
+                f"{field_name} must be in range (0.0, 1.0] (got {val})"
+            )
+
+    # Rule 6: data.source must equal "yfinance"
+    if data_cfg.get("source") != "yfinance":
+        raise ValueError(
+            f"data.source must be 'yfinance' in v0.1 (got '{data_cfg.get('source')}')"
+        )
+
+    # Rule 7: event_risk block must NOT contain event_date
+    if "event_date" in event:
+        raise ValueError(
+            "event_risk block must not contain event_date — "
+            "read it from thesis.event_date instead"
+        )
+
+    # Rule 8: take_profit block must NOT contain target_price
+    if "target_price" in tp and not isinstance(tp.get("target_price"), dict):
+        raise ValueError(
+            "take_profit block must not contain a scalar target_price — "
+            "read it from thesis.target_price instead"
+        )
+
+    # Rule 9: capital.max_total_capital_at_risk_pct must be in range (0.0, 1.0) exclusive of 1.0
+    risk_pct = capital.get("max_total_capital_at_risk_pct")
+    if risk_pct is not None and not (0.0 < risk_pct < 1.0):
+        raise ValueError(
+            f"capital.max_total_capital_at_risk_pct must be in range (0.0, 1.0) exclusive "
+            f"(got {risk_pct})"
+        )
+
+
+def config_snapshot_hash(cfg: BotConfig) -> str:
+    """SHA256 of deterministic sorted-key JSON serialization of the config."""
+    raw = json.dumps(cfg.model_dump(), sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()

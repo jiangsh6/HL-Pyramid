@@ -1,0 +1,259 @@
+bot:
+  name: long_thesis_pyramiding_bot
+  version: "0.1"
+  mode: paper                        # ONLY valid value in v0.1 — "live" is rejected
+  timezone: America/New_York
+
+symbol:
+  ticker: MU
+  asset_type: equity
+  direction: long_only
+  allow_short: false
+
+thesis:
+  enabled: true
+  thesis_name: "MU AI memory / HBM momentum into earnings"
+  thesis_start_date: "2026-05-27"
+  event_date: "2026-06-24"           # SINGLE SOURCE OF TRUTH for event date
+  target_price: 2000                 # SINGLE SOURCE OF TRUTH for target price
+  manual_override_required_after_expiry: true
+
+capital:
+  starting_equity: 100000
+  max_total_capital_at_risk_pct: 0.06
+  max_symbol_exposure_pct: 1.00
+  max_initial_exposure_pct: 0.20
+  max_starter_exposure_pct: 0.08
+  max_addon_exposure_pct: 0.30
+  reserve_cash_pct: 0.25
+
+leverage:
+  enabled: false
+  max_leverage: 1.0
+  max_leverage_with_profit_cushion: 1.5
+  profit_cushion_required_pct: 0.10
+  earnings_week_max_leverage: 1.0
+  force_deleverage_before_event: true
+
+entry:
+  mode: starter_pullback_breakout
+
+  starter:
+    enabled: true
+    exposure_pct: 0.08
+    require_thesis_enabled: true
+    require_close_above_ma20: true
+    max_distance_above_ma10_pct: 0.10
+    max_distance_above_ma20_pct: 0.15
+    max_intraday_gain_pct: 0.08
+    min_volume_vs_20d_avg: 0.80
+    max_gap_up_pct: 0.06
+
+  pullback_base:
+    enabled: true
+    additional_exposure_pct: 0.12
+    require_close_above_ma20: true
+    require_ma20_above_ma50: true
+    min_drawdown_from_20d_high_pct: 0.03
+    max_drawdown_from_20d_high_pct: 0.08
+    require_reclaim_ma5: true
+    require_reclaim_ma10: false
+    max_down_volume_vs_20d_avg: 1.50  # Reserved for v0.3 — NOT evaluated in v0.1
+
+  breakout_base:
+    enabled: true
+    additional_exposure_pct: 0.12
+    require_close_above_20d_high: true
+    require_close_above_ma10: true
+    require_ma10_above_ma20: true
+    require_ma20_above_ma50: true
+    min_volume_vs_20d_avg: 1.50
+    max_distance_above_ma10_pct: 0.08
+    max_intraday_gain_pct: 0.10
+
+add:
+  enabled: true
+  max_add_count: 4
+  min_days_after_entry_before_first_add: 2
+  min_days_between_adds: 1
+  min_unrealized_profit_before_first_add_pct: 0.04
+  add_trigger_type: price_step
+  add_trigger_pct: 0.05
+  add_sizes_pct:         # Must have exactly max_add_count elements
+    - 0.08
+    - 0.06
+    - 0.04
+    - 0.02
+  require_close_above_ma10: true
+  require_ma10_above_ma20: true
+  require_price_above_last_add_price: true
+  forbid_add_if_intraday_gain_above_pct: 0.10
+  forbid_add_if_distance_above_ma10_pct: 0.12
+  forbid_add_if_distance_above_ma20_pct: 0.20
+  stop_adding_if_event_within_trading_days: 10
+
+reduce:
+  enabled: true
+  addon_reduce:
+    reduce_latest_add_if_close_below_ma5: true
+    reduce_all_addons_if_close_below_ma10: true
+    reduce_all_addons_if_drawdown_from_peak_pct: 0.10
+  base_reduce:
+    reduce_base_half_if_close_below_ma20: true
+    reduce_base_half_if_drawdown_from_peak_pct: 0.15
+    reduce_base_all_if_close_below_ma50: true
+
+take_profit:
+  enabled: true
+  mode: hybrid_lifo
+
+  layered_profit:
+    enabled: true
+    levels:
+      - trigger_profit_pct_from_avg_entry: 0.30
+        reduce_pct_of_total_position: 0.10
+        reduce_priority: addons_first
+        move_stop_to: breakeven
+      - trigger_profit_pct_from_avg_entry: 0.50
+        reduce_pct_of_total_position: 0.15
+        reduce_priority: addons_first
+        move_stop_to: lock_20pct_profit
+      - trigger_profit_pct_from_avg_entry: 0.75
+        reduce_pct_of_total_position: 0.20
+        reduce_priority: addons_first
+        move_stop_to: lock_35pct_profit
+      - trigger_profit_pct_from_avg_entry: 1.00
+        reduce_pct_of_total_position: 0.25
+        reduce_priority: addons_first
+        move_stop_to: lock_50pct_profit
+
+  target_price:
+    enabled: true
+    # target_price read from thesis.target_price — NOT duplicated here
+    reduce_pct_of_remaining_position: 0.50
+    final_action: enter_runner_mode
+
+  runner_mode:
+    enabled: true
+    runner_position_pct_of_original_base: 0.25
+    trailing_stop_pct: 0.08
+
+  exposure_take_profit:
+    enabled: true
+    soft_exposure_cap_pct: 0.80
+    hard_exposure_cap_pct: 1.00
+    reduce_to_exposure_pct: 0.70
+
+  profit_giveback:
+    enabled: true
+    tiers:
+      - min_unrealized_profit_pct_of_equity: 0.05
+        max_giveback_pct: 0.50
+      - min_unrealized_profit_pct_of_equity: 0.10
+        max_giveback_pct: 0.35
+      - min_unrealized_profit_pct_of_equity: 0.20
+        max_giveback_pct: 0.25
+
+  trailing_take_profit:
+    enabled: true
+    tiers:
+      - min_profit_pct_from_avg_entry: 0.20
+        trailing_pct: 0.12
+        action: reduce_addons_50pct
+      - min_profit_pct_from_avg_entry: 0.50
+        trailing_pct: 0.10
+        action: reduce_all_addons
+      - min_profit_pct_from_avg_entry: 1.00
+        trailing_pct: 0.08
+        action: reduce_to_core
+
+risk:
+  initial_stop:
+    type: max_of_pct_or_atr
+    stop_pct: 0.12
+    atr_multiplier: 2.5
+
+  trailing_stop:
+    enabled: true
+    default_trailing_pct: 0.12
+    profit_tiers:
+      - min_profit_pct: 0.20
+        trailing_pct: 0.10
+      - min_profit_pct: 0.50
+        trailing_pct: 0.08
+      - min_profit_pct: 1.00
+        trailing_pct: 0.06
+
+  max_loss:
+    max_thesis_loss_pct_of_equity: 0.06
+    max_daily_loss_pct_of_equity: 0.03
+    max_intraday_drawdown_pct_of_equity: 0.04
+
+  no_trade_conditions:
+    max_intraday_gain_for_new_entry_pct: 0.10
+    max_intraday_loss_before_halt_pct: 0.10
+    max_gap_down_before_halt_pct: 0.08
+    max_spread_bps: 30
+    min_avg_daily_dollar_volume: 100000000
+
+event_risk:
+  enabled: true
+  # event_date read from thesis.event_date — NOT duplicated here
+  stop_new_entry_trading_days_before: 10
+  stop_adding_trading_days_before: 10
+  reduce_to_max_exposure_trading_days_before: 5
+  max_exposure_before_event_pct: 0.50
+  reduce_to_core_trading_days_before: 2
+  core_exposure_before_event_pct: 0.20
+  force_flat_before_event: false
+  force_flat_trading_days_before: 1
+  post_event:
+    cooldown_trading_days: 1
+    require_new_trend_confirmation: true
+    reset_add_count: true
+
+execution:
+  broker: paper
+  order_type: limit
+  limit_offset_bps: 10
+  max_slippage_bps: 25
+  allow_market_order: false
+  market_order_allowed_for_stop_exit: true
+  order_timeout_seconds: 60      # Live broker only — ignored in paper/backtest
+  retry_count: 2
+  retry_delay_seconds: 5
+  partial_fill_policy: accept_partial_then_reprice
+  round_lot_size: 1
+
+data:
+  source: yfinance               # v0.1 only valid value
+  bar_interval: 1d
+  intraday_check_interval_minutes: 15
+  use_adjusted_close: true
+  required_history_days: 120
+  indicators:
+    ma_windows: [5, 10, 20, 50]
+    atr_window: 14
+    volume_window: 20
+    high_breakout_window: 20
+
+logging:
+  run_dir: reports/long_thesis_bot
+  write_orders_csv: true
+  write_positions_csv: true
+  write_risk_csv: true
+  write_state_json: true
+  write_daily_summary: true
+
+notifications:
+  enabled: false
+  telegram_enabled: false         # Placeholder only — never called in v0.1
+  notify_on:
+    - entry
+    - add
+    - reduce
+    - take_profit
+    - stop
+    - event_risk_mode
+    - halt
+    - daily_summary
