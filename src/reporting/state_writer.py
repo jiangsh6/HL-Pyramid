@@ -38,18 +38,29 @@ def apply_fill(state: ThesisState, fill: Fill) -> ThesisState:
     """
     Apply a Fill to state in place.  Returns the same state object for chaining.
     Recalculates avg_entry_price after every fill (Section 7.2).
+
+    Uses fill.contracts (float) as the primary quantity.
+    Compat shim: if fill.contracts == 0 but fill.shares > 0, uses fill.shares
+    as the contract quantity (handles old serialized Fill objects).
     """
-    if fill.shares <= 0:
+    # ── compat shim ─────────────────────────────────────────────────────────
+    fill_qty = fill.contracts
+    if fill_qty == 0.0 and fill.shares > 0:
+        fill_qty = float(fill.shares)
+
+    if fill_qty <= 0.0:
         return state
     if fill.action not in (_BUY_ACTIONS | _SELL_ACTIONS):
         return state
 
-    today = _fill_date(fill)
+    today    = _fill_date(fill)
+    sz_dec   = state.sz_decimals  # 0 for equity compat, 3 for BTC, etc.
+    min_size = 0.0                # Phase 3 will pull from HLAssetMeta
 
     if fill.action == ActionType.BUY_STARTER:
         state.base_lot = LotRecord(
             lot_id="base", entry_price=fill.fill_price,
-            shares=fill.shares, entry_date=today,
+            contracts=fill_qty, entry_date=today,
         )
         state.entry_date = today
         state.add_count = 0
@@ -59,20 +70,20 @@ def apply_fill(state: ThesisState, fill: Fill) -> ThesisState:
         if state.base_lot is None:
             state.base_lot = LotRecord(
                 lot_id="base", entry_price=fill.fill_price,
-                shares=fill.shares, entry_date=today,
+                contracts=fill_qty, entry_date=today,
             )
             if state.entry_date is None:
                 state.entry_date = today
         else:
-            # Combine starter + base into a single base_lot with weighted avg
-            existing = state.base_lot.shares
-            total = existing + fill.shares
-            new_avg = (
-                existing * state.base_lot.entry_price + fill.shares * fill.fill_price
+            # Combine starter + base into single base_lot with weighted avg price
+            existing  = state.base_lot.contracts
+            total     = existing + fill_qty
+            new_avg   = (
+                existing * state.base_lot.entry_price + fill_qty * fill.fill_price
             ) / total
             state.base_lot = LotRecord(
                 lot_id="base", entry_price=new_avg,
-                shares=total, entry_date=state.base_lot.entry_date,
+                contracts=total, entry_date=state.base_lot.entry_date,
             )
         recalc_avg_entry_price(state)
         state.last_add_price = state.avg_entry_price
@@ -82,26 +93,29 @@ def apply_fill(state: ThesisState, fill: Fill) -> ThesisState:
         state.addon_lots = list(state.addon_lots) + [
             LotRecord(
                 lot_id=new_id, entry_price=fill.fill_price,
-                shares=fill.shares, entry_date=today,
+                contracts=fill_qty, entry_date=today,
             )
         ]
         state.add_count += 1
         state.last_add_price = fill.fill_price
 
     elif fill.action in _SELL_ACTIONS:
-        remaining = fill.shares
+        remaining = fill_qty
         if state.addon_lots:
-            updated, sold = lifo_reduce(state.addon_lots, remaining)
+            updated, sold = lifo_reduce(
+                state.addon_lots, remaining,
+                sz_decimals=sz_dec, min_size=min_size,
+            )
             state.addon_lots = updated
             remaining -= sold
         if remaining > 0 and state.base_lot is not None:
-            sell_from_base = min(state.base_lot.shares, remaining)
-            new_shares = state.base_lot.shares - sell_from_base
-            if new_shares > 0:
+            sell_from_base = min(state.base_lot.contracts, remaining)
+            new_contracts  = round(state.base_lot.contracts - sell_from_base, sz_dec)
+            if new_contracts > min_size:
                 state.base_lot = LotRecord(
                     lot_id=state.base_lot.lot_id,
                     entry_price=state.base_lot.entry_price,
-                    shares=new_shares,
+                    contracts=new_contracts,
                     entry_date=state.base_lot.entry_date,
                 )
             else:
@@ -109,8 +123,8 @@ def apply_fill(state: ThesisState, fill: Fill) -> ThesisState:
         state.realized_pnl += fill.realized_pnl
 
     recalc_avg_entry_price(state)
-    if state.current_position_shares > 0 and state.avg_entry_price:
-        state.current_notional = state.current_position_shares * state.avg_entry_price
+    if state.current_position_contracts > 0 and state.avg_entry_price:
+        state.current_notional = state.current_position_contracts * state.avg_entry_price
     else:
         state.current_notional = 0.0
 
@@ -140,9 +154,10 @@ def reset_state_to_flat(state: ThesisState) -> ThesisState:
     state.runner_target_shares = None
     state.base_lot = None
     state.addon_lots = []
-    state.avg_entry_price = None
-    state.current_position_shares = 0
-    state.current_notional = 0.0
+    state.avg_entry_price               = None
+    state.current_position_contracts    = 0.0
+    state.current_position_shares       = 0
+    state.current_notional              = 0.0
     state.add_count = 0
     state.last_add_price = None
     state.highest_price_since_entry = None

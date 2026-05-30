@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import yaml
@@ -30,11 +31,18 @@ def validate_config(cfg: BotConfig) -> None:
     event    = cfg.event_risk
     tp       = cfg.take_profit
 
-    # Rule 1: bot.mode must equal "paper"
-    if bot.get("mode") != "paper":
+    # Rule 1: bot.mode must be "paper" (equity paper) or "testnet" (HL testnet).
+    # "mainnet" is explicitly rejected with a clear message; mainnet unlock is Phase 7.
+    mode = bot.get("mode")
+    if mode == "mainnet":
         raise ValueError(
-            f"bot.mode must be 'paper' (got '{bot.get('mode')}') — "
-            "live trading is not supported in v0.1"
+            "mainnet mode is not enabled — set bot.mode to testnet"
+        )
+    _valid_modes = {"paper", "testnet"}
+    if mode not in _valid_modes:
+        raise ValueError(
+            f"bot.mode must be 'paper' or 'testnet' "
+            f"(got '{mode}') — live/mainnet trading not supported"
         )
 
     # Rule 2: thesis.event_date must be a valid ISO date when event_risk.enabled
@@ -83,11 +91,17 @@ def validate_config(cfg: BotConfig) -> None:
                 f"{field_name} must be in range (0.0, 1.0] (got {val})"
             )
 
-    # Rule 6: data.source must equal "yfinance"
-    if data_cfg.get("source") != "yfinance":
+    # Rule 6: data.source must be "yfinance" or "hyperliquid"
+    _valid_sources = {"yfinance", "hyperliquid"}
+    if data_cfg.get("source") not in _valid_sources:
         raise ValueError(
-            f"data.source must be 'yfinance' in v0.1 (got '{data_cfg.get('source')}')"
+            f"data.source must be 'yfinance' or 'hyperliquid' "
+            f"(got '{data_cfg.get('source')}')"
         )
+
+    # HL-specific validation (only when source = "hyperliquid")
+    if data_cfg.get("source") == "hyperliquid":
+        _validate_hl_block(cfg)
 
     # Rule 7: event_risk block must NOT contain event_date
     if "event_date" in event:
@@ -110,6 +124,64 @@ def validate_config(cfg: BotConfig) -> None:
             f"capital.max_total_capital_at_risk_pct must be in range (0.0, 1.0) exclusive "
             f"(got {risk_pct})"
         )
+
+
+def _validate_hl_block(cfg: BotConfig) -> None:
+    """
+    Validate the `hl` config block when data.source = "hyperliquid".
+    Enforces Decision 1 (testnet-first) and Decision 2 (mainnet gate).
+    """
+    hl: dict = cfg.hl or {}
+    if not hl:
+        raise ValueError(
+            "data.source='hyperliquid' requires an 'hl' config block with "
+            "hl.network, hl.coin, hl.bar_interval, hl.wallet_address"
+        )
+
+    # Network must be testnet or mainnet
+    network = hl.get("network")
+    if network not in ("testnet", "mainnet"):
+        raise ValueError(
+            f"hl.network must be 'testnet' or 'mainnet' (got '{network}')"
+        )
+
+    # Decision 1 + Decision 2: mainnet requires explicit env-var confirmation.
+    # HL_ALLOW_MAINNET=true must be set; config alone cannot unlock mainnet.
+    if network == "mainnet":
+        if os.environ.get("HL_ALLOW_MAINNET", "").strip().lower() != "true":
+            raise ValueError(
+                "hl.network='mainnet' requires the environment variable "
+                "HL_ALLOW_MAINNET=true to be explicitly set. "
+                "Use hl.network='testnet' for all development phases."
+            )
+
+    # Required string fields
+    for field in ("coin", "bar_interval", "wallet_address"):
+        if not hl.get(field):
+            raise ValueError(
+                f"hl.{field} is required when data.source='hyperliquid'"
+            )
+
+    # Optional but validated when present
+    sz_dec = hl.get("sz_decimals")
+    if sz_dec is not None:
+        if not isinstance(sz_dec, int) or not (0 <= sz_dec <= 8):
+            raise ValueError(
+                f"hl.sz_decimals must be an integer in [0, 8] (got {sz_dec!r})"
+            )
+
+    min_sz = hl.get("min_size")
+    if min_sz is not None:
+        try:
+            min_sz_f = float(min_sz)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"hl.min_size must be a positive float (got {min_sz!r})"
+            )
+        if min_sz_f <= 0:
+            raise ValueError(
+                f"hl.min_size must be > 0 (got {min_sz_f})"
+            )
 
 
 def config_snapshot_hash(cfg: BotConfig) -> str:

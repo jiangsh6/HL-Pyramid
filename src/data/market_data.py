@@ -1,13 +1,18 @@
 """
-Market data fetching via yfinance (Section 6.3).
+Market data fetching.
 
-fetch_ohlcv() is the only public entry point in v0.1.
-All callers should pass required_history_days worth of look-back in their
-`start` date so indicators can warm up before the first decision bar.
+v0.1 (equity): fetch_ohlcv() via yfinance — returns adj_close.
+HL Phase 1:    fetch_ohlcv_hl() via Hyperliquid candle endpoint — returns close/adj_close.
+Router:        fetch_ohlcv_dispatch() selects source from config.data.source.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Optional
+
 import pandas as pd
+
+if TYPE_CHECKING:
+    from src.core.models import BotConfig
 
 
 def fetch_ohlcv(ticker: str, start: str, end: str) -> pd.DataFrame:
@@ -83,3 +88,60 @@ def fetch_ohlcv(ticker: str, start: str, end: str) -> pd.DataFrame:
         df.index = df.index.tz_localize(None)
 
     return df
+
+
+def fetch_ohlcv_dispatch(
+    source: str,
+    ticker_or_coin: str,
+    start: str,
+    end: str,
+    config: Optional["BotConfig"] = None,
+) -> pd.DataFrame:
+    """
+    Route to the correct data source based on `source`.
+
+    Parameters
+    ----------
+    source : str
+        "yfinance" or "hyperliquid".
+    ticker_or_coin : str
+        Equity ticker (e.g. "MU") for yfinance, or coin name (e.g. "BTC")
+        for Hyperliquid.
+    start : str
+        Start date/datetime, ISO format "YYYY-MM-DD".
+    end : str
+        End date/datetime, ISO format "YYYY-MM-DD".
+    config : BotConfig, optional
+        Required for Hyperliquid (reads hl.network, hl.bar_interval).
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: open, high, low, close, adj_close, volume.
+    """
+    if source == "yfinance":
+        return fetch_ohlcv(ticker_or_coin, start, end)
+
+    if source == "hyperliquid":
+        from src.hl.client import HyperliquidClient
+        from src.hl.candles import fetch_ohlcv_hl
+
+        if config is None:
+            raise ValueError(
+                "config is required for Hyperliquid data source"
+            )
+
+        hl_cfg   = config.hl or {}
+        network  = hl_cfg.get("network", "testnet")
+        interval = hl_cfg.get("bar_interval", "4h")
+
+        # Convert ISO date strings to UTC millisecond timestamps
+        start_ms = int(pd.Timestamp(start, tz="UTC").timestamp() * 1000)
+        end_ms   = int(pd.Timestamp(end,   tz="UTC").timestamp() * 1000)
+
+        client = HyperliquidClient(network=network)
+        return fetch_ohlcv_hl(ticker_or_coin, interval, start_ms, end_ms, client)
+
+    raise ValueError(
+        f"Unknown data source: '{source}'. Valid values: 'yfinance', 'hyperliquid'."
+    )

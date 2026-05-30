@@ -8,31 +8,51 @@ from src.core.models import (
 
 
 def lifo_reduce(
-    addon_lots: List[LotRecord], shares_to_sell: int
-) -> Tuple[List[LotRecord], int]:
+    addon_lots: List[LotRecord],
+    contracts_to_sell: float = 0.0,
+    sz_decimals: int = 0,
+    min_size: float = 0.0,
+    # Backward-compat alias — old callers pass shares_to_sell=N as a keyword arg
+    shares_to_sell: Optional[float] = None,
+) -> Tuple[List[LotRecord], float]:
     """
     Reduce add-on lots LIFO (latest lot first).  Section 13.1.
-    Returns (updated_lots, actual_shares_sold).
+
+    Parameters
+    ----------
+    addon_lots       : current list of add-on lots (latest is index -1).
+    contracts_to_sell: float contracts to remove (primary parameter).
+    sz_decimals      : decimal places to round remaining contracts to.
+    min_size         : lots with remaining contracts below this are dropped.
+    shares_to_sell   : deprecated compat alias for contracts_to_sell.
+
+    Returns
+    -------
+    (updated_lots, actual_contracts_sold)
     """
-    remaining = shares_to_sell
+    if shares_to_sell is not None:
+        contracts_to_sell = float(shares_to_sell)
+
+    remaining = contracts_to_sell
     updated: List[LotRecord] = []
     for lot in reversed(addon_lots):
         if remaining <= 0:
             updated.insert(0, lot)
             continue
-        sell = min(lot.shares, remaining)
-        remaining -= sell
-        if lot.shares - sell > 0:
+        sell              = min(lot.contracts, remaining)
+        remaining        -= sell
+        new_contracts     = round(lot.contracts - sell, sz_decimals)
+        if new_contracts > min_size:
             updated.insert(
                 0,
                 LotRecord(
                     lot_id=lot.lot_id,
                     entry_price=lot.entry_price,
-                    shares=lot.shares - sell,
+                    contracts=new_contracts,
                     entry_date=lot.entry_date,
                 ),
             )
-    return updated, shares_to_sell - remaining
+    return updated, contracts_to_sell - remaining
 
 
 def drawdown_from_peak(state: ThesisState, indicators: IndicatorSnapshot) -> float:
@@ -137,14 +157,24 @@ def check_base_reduce(
 
 
 def recalc_avg_entry_price(state: ThesisState) -> None:
-    """Section 7.2. Mutates state.avg_entry_price and current_position_shares."""
-    lots = ([state.base_lot] if state.base_lot is not None and state.base_lot.shares > 0 else [])
-    lots = lots + [l for l in state.addon_lots if l.shares > 0]
-    total_shares = sum(l.shares for l in lots)
-    if total_shares <= 0:
-        state.avg_entry_price = None
-        state.current_position_shares = 0
+    """
+    Section 7.2.  Mutates avg_entry_price, current_position_contracts,
+    and current_position_shares (compat).
+
+    Uses lot.contracts (float) as the primary quantity.
+    """
+    lots = (
+        [state.base_lot] if state.base_lot is not None and state.base_lot.contracts > 0
+        else []
+    )
+    lots = lots + [l for l in state.addon_lots if l.contracts > 0]
+    total_contracts = sum(l.contracts for l in lots)
+    if total_contracts <= 0:
+        state.avg_entry_price               = None
+        state.current_position_contracts    = 0.0
+        state.current_position_shares       = 0
         return
-    weighted = sum(l.shares * l.entry_price for l in lots)
-    state.avg_entry_price = weighted / total_shares
-    state.current_position_shares = total_shares
+    weighted = sum(l.contracts * l.entry_price for l in lots)
+    state.avg_entry_price               = weighted / total_contracts
+    state.current_position_contracts    = total_contracts
+    state.current_position_shares       = int(total_contracts)  # compat truncation

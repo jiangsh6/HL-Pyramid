@@ -23,7 +23,9 @@ def calc_indicators(df: pd.DataFrame, cfg: BotConfig) -> IndicatorSnapshot:
     vol_window  = ind_cfg.get("volume_window", 20)
     high_window = ind_cfg.get("high_breakout_window", 20)
 
-    adj   = df["adj_close"]
+    # Use adj_close when present (yfinance / equity path); fall back to close
+    # when only the raw crypto column is available (Hyperliquid path).
+    adj   = df["adj_close"] if "adj_close" in df.columns else df["close"]
     raw_h = df["high"]
     raw_l = df["low"]
     raw_o = df["open"]
