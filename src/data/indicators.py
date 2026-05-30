@@ -93,11 +93,15 @@ def calc_indicators(df: pd.DataFrame, cfg: BotConfig) -> IndicatorSnapshot:
         gap_down = float("nan")
 
     bar_date = df.index[-1]
+    bar_time = None
+    if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
+        bar_time = df.index[-1].to_pydatetime()
     if hasattr(bar_date, "date"):
         bar_date = bar_date.date()
 
     return IndicatorSnapshot(
         date=bar_date,
+        bar_time=bar_time,
         adj_close=last_adj,
         open=last_open,
         high=last_high,

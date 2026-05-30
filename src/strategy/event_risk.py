@@ -10,11 +10,18 @@ from src.core.models import (
 )
 
 
-def calc_trading_days_to_event(today: date, event_date: date) -> int:
+def calc_trading_days_to_event(
+    today: date,
+    event_date: date,
+    use_calendar_days: bool = False,
+) -> int:
     """
-    Business-day count between today and event_date (excluding today).
+    Day count between today and event_date (excluding today).
     Returns negative if event already passed.
+    When use_calendar_days=True, counts all calendar days instead of business days.
     """
+    if use_calendar_days:
+        return (event_date - today).days
     if event_date >= today:
         return int(np.busday_count(today, event_date))
     return -int(np.busday_count(event_date, today))
@@ -43,7 +50,8 @@ def update_event_risk_mode(
         return
 
     today = indicators.date
-    days_to_event = calc_trading_days_to_event(today, event_date)
+    use_calendar = config.event_risk.get("use_calendar_days", False)
+    days_to_event = calc_trading_days_to_event(today, event_date, use_calendar)
     state.days_to_event = days_to_event
     threshold = config.event_risk.get("stop_adding_trading_days_before", 10)
     cooldown = config.event_risk["post_event"].get("cooldown_trading_days", 1)
@@ -89,7 +97,8 @@ def check_event_derisking(
         return None
 
     today = indicators.date
-    days_to_event = calc_trading_days_to_event(today, event_date)
+    use_calendar = config.event_risk.get("use_calendar_days", False)
+    days_to_event = calc_trading_days_to_event(today, event_date, use_calendar)
     if days_to_event < 0:
         return None
 

@@ -198,6 +198,7 @@ risk:
 
 event_risk:
   enabled: false                     # No earnings-style catalyst date for this thesis
+  use_calendar_days: true            # Phase 5: crypto trades 24/7 — count all calendar days
   # event_date NOT set — event risk module is disabled entirely
   stop_new_entry_trading_days_before: 10
   stop_adding_trading_days_before: 10

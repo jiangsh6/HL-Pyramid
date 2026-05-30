@@ -70,13 +70,18 @@ class IndicatorSnapshot(BaseModel):
     gap_up_pct:             float   # max(0, (raw_open - prev_adj_close) / prev_adj_close)
     gap_down_pct:           float   # max(0, (prev_adj_close - raw_open) / prev_adj_close)
     # close is always populated = adj_close value (alias for crypto-perp compat)
-    close:                  Optional[float] = None
+    close:                  Optional[float]    = None
+    # bar_time is set only for sub-daily bars with tz-aware DatetimeIndex (HL path);
+    # stays None for date-only yfinance data (backward compat).
+    bar_time:               Optional[datetime] = None
 
     @model_validator(mode="after")
     def _populate_close(self) -> "IndicatorSnapshot":
         """Ensure close is always set; defaults to adj_close for equity compat."""
         if self.close is None:
             self.close = self.adj_close
+        if self.bar_time is not None:
+            self.date = self.bar_time.date()
         return self
 
 

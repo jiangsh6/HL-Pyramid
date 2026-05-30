@@ -162,6 +162,16 @@ def _validate_hl_block(cfg: BotConfig) -> None:
                 f"hl.{field} is required when data.source='hyperliquid'"
             )
 
+    # bar_interval must be a recognised cadence when present
+    bar_interval = hl.get("bar_interval")
+    if bar_interval is not None:
+        _valid_intervals = {"1m", "5m", "15m", "1h", "4h", "1d"}
+        if bar_interval not in _valid_intervals:
+            raise ValueError(
+                f"hl.bar_interval must be one of {sorted(_valid_intervals)} "
+                f"(got '{bar_interval}')"
+            )
+
     # Optional but validated when present
     sz_dec = hl.get("sz_decimals")
     if sz_dec is not None:
