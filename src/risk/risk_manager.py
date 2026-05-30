@@ -39,6 +39,7 @@ def check_order_allowed(
     decision: Decision,
     config: BotConfig,
     indicators: Optional[IndicatorSnapshot] = None,
+    account_value: Optional[float] = None,
 ) -> Tuple[bool, str]:
     """
     Pre-trade gate.
@@ -80,6 +81,22 @@ def check_order_allowed(
             val = getattr(indicators, field_name, None)
             if isinstance(val, float) and math.isnan(val):
                 return False, f"nan_indicator: {field_name}"
+
+    # ── Liquidation proximity (HL Phase 3) ────────────────────────────────
+    if state.liquidation_price is not None and indicators is not None:
+        current_price = indicators.adj_close
+        if current_price > 0:
+            liq_margin = (current_price - state.liquidation_price) / current_price
+            if liq_margin < 0.05:
+                return False, "approaching_liquidation_price"
+
+    # ── Margin ratio (HL Phase 3) ─────────────────────────────────────────
+    if state.margin_used_usd > 0:
+        av = account_value if account_value is not None else float(
+            config.capital.get("starting_equity", 0)
+        )
+        if av > 0 and (state.margin_used_usd / av) > 0.80:
+            return False, "margin_ratio_too_high"
 
     # ── Exposure cap for buy orders ────────────────────────────────────────
     if (decision.action in _BUY_ACTIONS

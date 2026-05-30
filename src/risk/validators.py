@@ -91,6 +91,19 @@ def validate_data(
             ),
         ))
 
+    # ── WARN: liquidation price above initial stop (HL Phase 3) ─────────
+    if (state.liquidation_price is not None
+            and state.initial_stop_price is not None
+            and state.liquidation_price > state.initial_stop_price):
+        issues.append(ValidationIssue(
+            severity=WARN,
+            reason=(
+                f"liquidation_price_above_stop: "
+                f"liq={state.liquidation_price} > initial_stop={state.initial_stop_price}. "
+                f"Hard stop must be raised to avoid forced liquidation."
+            ),
+        ))
+
     # ── WARN: average daily dollar volume below minimum ───────────────────
     min_dollar_vol = float(
         config.risk["no_trade_conditions"].get("min_avg_daily_dollar_volume", 0)

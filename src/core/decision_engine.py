@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import logging
 import math
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from src.core.models import (
     ActionType, BotConfig, BotState, Decision, IndicatorSnapshot, ThesisState,
@@ -13,6 +14,11 @@ from src.strategy.take_profit import check_take_profit
 from src.strategy.stops import update_trailing_stop, check_stop_triggers
 from src.strategy.event_risk import update_event_risk_mode, check_event_derisking
 from src.strategy.sizing import calc_entry_size, calc_addon_size
+
+if TYPE_CHECKING:
+    from src.hl.account import HLAccountSnapshot
+
+_log = logging.getLogger(__name__)
 
 
 def _has_nan(ind: IndicatorSnapshot) -> bool:
@@ -58,6 +64,7 @@ def run(
     state: ThesisState,
     indicators: IndicatorSnapshot,
     config: BotConfig,
+    hl_snapshot: Optional["HLAccountSnapshot"] = None,
 ) -> Decision:
     """
     Section 8.1 — 13-step decision cycle.
@@ -78,7 +85,7 @@ def run(
             indicators=indicators,
         )
 
-    # Step 3: state consistency
+    # Step 3: state consistency (paper mode)
     expected = (state.base_lot.shares if state.base_lot is not None else 0) + sum(
         l.shares for l in state.addon_lots
     )
@@ -92,6 +99,31 @@ def run(
             new_state=BotState.HALTED,
             indicators=indicators,
         )
+
+    # Step 3b: HL position reconcile (hyperliquid mode only)
+    if config.data.get("source") == "hyperliquid" and hl_snapshot is not None:
+        from src.hl.position_reconciler import reconcile, update_state_from_hl
+        reconcile_result = reconcile(state, hl_snapshot, config)
+        if reconcile_result.status == "halt":
+            state.state = BotState.HALTED
+            state.halted = True
+            state.halt_reason = reconcile_result.reason or "reconcile_halt"
+            return Decision(
+                action=ActionType.HALT,
+                reason=reconcile_result.reason or "reconcile_halt",
+                new_state=BotState.HALTED,
+                indicators=indicators,
+            )
+        if reconcile_result.status == "warn":
+            _log.warning(
+                "Reconcile warn: %s (drift=%.6f)",
+                reconcile_result.reason, reconcile_result.drift_contracts,
+            )
+        # Update live metadata from HL position (observes only)
+        coin = config.hl.get("coin", "") if config.hl else ""
+        hl_pos = next((p for p in hl_snapshot.positions if p.coin == coin), None)
+        if hl_pos is not None:
+            update_state_from_hl(state, hl_pos)
 
     # Step 4: trailing stop update BEFORE any trigger check
     update_trailing_stop(state, indicators, config)
