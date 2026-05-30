@@ -20,6 +20,7 @@ import signal
 import sys
 import threading
 import time
+import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -31,14 +32,14 @@ if str(_ROOT) not in sys.path:
 
 from src.core.config_loader import load_config
 from src.core.models import BotConfig, ThesisState
-from src.hl.auth import get_private_key
+from src.hl.auth import get_private_key, validate_mainnet_intent
 from src.hl.client import HyperliquidClient
 from src.hl.funding import (
     apply_funding_to_state,
     calc_funding_payment,
     get_predicted_funding,
 )
-from src.hl.ws_feed import TESTNET_WS_URL, HLWebSocketFeed
+from src.hl.ws_feed import TESTNET_WS_URL, MAINNET_WS_URL, HLWebSocketFeed
 
 logging.basicConfig(
     level=logging.INFO,
@@ -137,19 +138,40 @@ def apply_candle_close_funding(
     return state
 
 
-def main(config_path: str = "config/btc_long_thesis.yaml") -> None:
+def main(config_path: str = "config/btc_long_thesis.yaml", mainnet: bool = False) -> None:
     _log.info("Loading config from %s", config_path)
     config = load_config(config_path)
 
+    if mainnet:
+        try:
+            validate_mainnet_intent(config, cli_has_mainnet_flag=True)
+        except ValueError as exc:
+            raise SystemExit(f"ERROR: {exc}") from exc
+    elif config.bot.get("mode") == "mainnet":
+        raise SystemExit(
+            "ERROR: config has bot.mode=mainnet but --mainnet flag was not passed. "
+            "Refusing to start."
+        )
+
     private_key = startup_checks(config)
-    _log.info("Startup checks passed — entering live loop (testnet)")
 
     _install_shutdown_handler(_STOP_EVENT)
 
     hl_cfg = config.hl or {}
     coin = hl_cfg.get("coin", "BTC")
     network = hl_cfg.get("network", "testnet")
-    ws_url = TESTNET_WS_URL
+    ws_url = MAINNET_WS_URL if network == "mainnet" else TESTNET_WS_URL
+    if config.bot.get("mode") == "mainnet":
+        max_risk = (
+            float(config.capital["starting_equity"])
+            * float(config.capital["max_total_capital_at_risk_pct"])
+        )
+        _log.warning("WARNING: MAINNET MODE ACTIVE. Real funds at risk.")
+        _log.warning("Coin: %s | Max risk: $%.2f", coin, max_risk)
+        time.sleep(5)
+
+    _log.info("Startup checks passed — entering live loop (%s)", network)
+
     client = HyperliquidClient(network=network)
     state = ThesisState(symbol=config.symbol.get("ticker", coin))
 
@@ -192,5 +214,21 @@ def main(config_path: str = "config/btc_long_thesis.yaml") -> None:
 
 
 if __name__ == "__main__":
-    cfg_path = sys.argv[1] if len(sys.argv) > 1 else "config/btc_long_thesis.yaml"
-    main(cfg_path)
+    parser = argparse.ArgumentParser(description="Run the Hyperliquid live loop.")
+    parser.add_argument(
+        "--config",
+        default="config/btc_long_thesis.yaml",
+        help="Path to bot config YAML.",
+    )
+    parser.add_argument(
+        "config_path",
+        nargs="?",
+        help="Backward-compatible positional config path.",
+    )
+    parser.add_argument(
+        "--mainnet",
+        action="store_true",
+        help="Required extra confirmation flag for real-money mainnet mode.",
+    )
+    args = parser.parse_args()
+    main(args.config_path or args.config, mainnet=args.mainnet)

@@ -13,6 +13,9 @@ from .models import BotConfig
 def load_config(path: str) -> BotConfig:
     """Load YAML config file and return a validated BotConfig."""
     raw = yaml.safe_load(Path(path).read_text())
+    mainnet_confirmed = raw.pop("mainnet_confirmed", False)
+    if mainnet_confirmed:
+        raw.setdefault("bot", {})["mainnet_confirmed"] = mainnet_confirmed
     cfg = BotConfig(**raw)
     validate_config(cfg)
     return cfg
@@ -31,17 +34,25 @@ def validate_config(cfg: BotConfig) -> None:
     event    = cfg.event_risk
     tp       = cfg.take_profit
 
-    # Rule 1: bot.mode must be "paper" (equity paper) or "testnet" (HL testnet).
-    # "mainnet" is explicitly rejected with a clear message; mainnet unlock is Phase 7.
+    # Rule 1: bot.mode must be "paper", "testnet", or "mainnet".
+    # Mainnet is allowed only behind explicit env-var and config confirmations.
     mode = bot.get("mode")
     if mode == "mainnet":
-        raise ValueError(
-            "mainnet mode is not enabled — set bot.mode to testnet"
-        )
-    _valid_modes = {"paper", "testnet"}
+        if os.environ.get("HL_ALLOW_MAINNET") != "true":
+            raise ValueError(
+                "mainnet mode is not enabled; "
+                "mainnet mode requires HL_ALLOW_MAINNET=true env var. "
+                "Set this explicitly to confirm you intend to trade real funds."
+            )
+        if bot.get("mainnet_confirmed") is not True:
+            raise ValueError(
+                "mainnet mode requires mainnet_confirmed: true in config. "
+                "Add this field explicitly to confirm intent."
+            )
+    _valid_modes = {"paper", "testnet", "mainnet"}
     if mode not in _valid_modes:
         raise ValueError(
-            f"bot.mode must be 'paper' or 'testnet' "
+            f"bot.mode must be 'paper', 'testnet', or 'mainnet' "
             f"(got '{mode}') — live/mainnet trading not supported"
         )
 
