@@ -18,3 +18,5 @@ state.json
 # pytest cache
 .pytest_cache/
 .coverage
+.env
+secrets.yaml
