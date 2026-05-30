@@ -104,6 +104,15 @@ def validate_data(
             ),
         ))
 
+    if state.last_funding_rate > 0.0005:
+        issues.append(ValidationIssue(
+            severity=WARN,
+            reason=(
+                f"High funding rate: {state.last_funding_rate:.4%}/hr. "
+                f"Holding cost is elevated."
+            ),
+        ))
+
     # ── WARN: average daily dollar volume below minimum ───────────────────
     min_dollar_vol = float(
         config.risk["no_trade_conditions"].get("min_avg_daily_dollar_volume", 0)

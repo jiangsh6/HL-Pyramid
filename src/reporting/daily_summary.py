@@ -69,4 +69,11 @@ def format_summary(
         f"Open risk (all lots): ${open_risk:,.0f}",
         f"Remaining budget:    ${remaining_budget:,.0f}",
     ]
+    if state.cumulative_funding_pnl != 0.0 or state.last_funding_rate != 0.0:
+        lines.extend([
+            "",
+            "--- Funding ---",
+            f"Cumulative Funding PnL:  ${state.cumulative_funding_pnl:,.2f}",
+            f"Last Funding Rate:        {state.last_funding_rate:.4%}/hr",
+        ])
     return "\n".join(lines)

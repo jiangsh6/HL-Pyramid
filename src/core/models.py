@@ -125,6 +125,8 @@ class ThesisState(BaseModel):
     days_to_event: Optional[int] = None
     # HL Phase 1: funding PnL placeholder (computed in Phase 6)
     cumulative_funding_pnl: float = 0.0
+    last_funding_rate: float = 0.0
+    next_funding_timestamp: Optional[datetime] = None
     # HL Phase 3: live account state (populated by reconciler)
     liquidation_price: Optional[float] = None
     margin_used_usd:   float = 0.0

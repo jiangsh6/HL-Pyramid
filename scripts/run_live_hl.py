@@ -30,8 +30,14 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src.core.config_loader import load_config
-from src.core.models import BotConfig
+from src.core.models import BotConfig, ThesisState
 from src.hl.auth import get_private_key
+from src.hl.client import HyperliquidClient
+from src.hl.funding import (
+    apply_funding_to_state,
+    calc_funding_payment,
+    get_predicted_funding,
+)
 from src.hl.ws_feed import TESTNET_WS_URL, HLWebSocketFeed
 
 logging.basicConfig(
@@ -42,6 +48,7 @@ _log = logging.getLogger("run_live_hl")
 
 _STOP_EVENT = threading.Event()
 _4H_SECONDS = 4 * 60 * 60
+HIGH_FUNDING_RATE_THRESHOLD = 0.0005
 
 
 def next_4h_candle_close(now: Optional[datetime] = None) -> datetime:
@@ -106,6 +113,30 @@ def run_intraday_monitor(
     _log.info("Intraday monitor stopped")
 
 
+def apply_candle_close_funding(
+    state: ThesisState,
+    coin: str,
+    client: HyperliquidClient,
+    mark_price: float,
+    hours: float = 4.0,
+) -> ThesisState:
+    """Fetch predicted funding, warn if elevated, and apply candle funding PnL."""
+    predicted_rate = get_predicted_funding(coin, client)
+    if predicted_rate is not None:
+        state.last_funding_rate = predicted_rate
+        if predicted_rate > HIGH_FUNDING_RATE_THRESHOLD:
+            _log.warning("High funding rate: %.4f%%/hr", predicted_rate * 100)
+    payment = calc_funding_payment(
+        predicted_rate or 0.0,
+        state.current_position_contracts,
+        mark_price,
+        hours=hours,
+    )
+    if payment != 0.0:
+        return apply_funding_to_state(state, payment)
+    return state
+
+
 def main(config_path: str = "config/btc_long_thesis.yaml") -> None:
     _log.info("Loading config from %s", config_path)
     config = load_config(config_path)
@@ -117,7 +148,10 @@ def main(config_path: str = "config/btc_long_thesis.yaml") -> None:
 
     hl_cfg = config.hl or {}
     coin = hl_cfg.get("coin", "BTC")
+    network = hl_cfg.get("network", "testnet")
     ws_url = TESTNET_WS_URL
+    client = HyperliquidClient(network=network)
+    state = ThesisState(symbol=config.symbol.get("ticker", coin))
 
     feed = HLWebSocketFeed(ws_url=ws_url, coin=coin)
     feed.start()
@@ -146,7 +180,10 @@ def main(config_path: str = "config/btc_long_thesis.yaml") -> None:
                 break
 
             _log.info("4h candle closed at %s — running decision engine", target.isoformat())
-            # Phase 6 will call decision engine here; placeholder log for now.
+            mark_price = feed.get_latest_price()
+            if mark_price is not None:
+                state = apply_candle_close_funding(state, coin, client, mark_price, hours=4.0)
+            # Decision engine / fill / state persistence remains later live-loop work.
     finally:
         _log.info("Shutting down — stopping WS feed")
         feed.stop()

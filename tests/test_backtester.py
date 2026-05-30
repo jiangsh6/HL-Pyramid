@@ -6,7 +6,7 @@ Required tests:
   2. trailing stop updated BEFORE decision (not after)
   3. no look-ahead: indicators at bar i only see bars 0..i
   4. gap-down fill executes at next-bar open (not at stop price)
-  5. all 19 metrics present in output
+  5. all 20 metrics present in output
   6. backtest completes on 200-bar synthetic data without error
 """
 from __future__ import annotations
@@ -285,7 +285,7 @@ def test_gap_down_fill_at_next_bar_open_not_stop_price():
 # 5. All 19 metrics present in output
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_all_19_metrics_present():
+def test_all_20_metrics_present():
     cfg = _minimal_config()
     df = _make_ohlcv(200)
     result = run_backtest(df, cfg)

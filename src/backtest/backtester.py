@@ -29,6 +29,7 @@ from src.core.models import (
 )
 from src.data.indicators import calc_indicators
 from src.execution.paper_broker import execute as paper_execute
+from src.hl.funding import apply_funding_to_state, calc_funding_payment
 from src.reporting.logger import log_cycle
 from src.reporting.state_writer import apply_fill
 from src.strategy.stops import _determine_trailing_pct
@@ -57,6 +58,7 @@ def run_backtest(
     run_dir: Optional[str] = None,
     ticker: Optional[str] = None,
     initial_state: Optional[ThesisState] = None,
+    funding_rates: Optional[dict] = None,
 ) -> BacktestResult:
     """
     Run the full backtest over `df`.
@@ -84,6 +86,7 @@ def run_backtest(
     cfg_hash = config_snapshot_hash(config)
 
     state = initial_state if initial_state is not None else ThesisState(symbol=symbol)
+    bar_hours = bar_interval_to_hours(config.data.get("bar_interval", "1d"))
 
     records: List[BacktestRecord] = []
 
@@ -134,6 +137,7 @@ def run_backtest(
         fill_price_used: Optional[float] = None
         fill_shares_signed = 0
         fill_realized_pnl = 0.0
+        funding_payment = 0.0
         next_open = float(row_t1["open"])
 
         if decision.action not in (ActionType.NO_ACTION, ActionType.HALT):
@@ -166,6 +170,18 @@ def run_backtest(
             if decision.new_state is not None and decision.new_state != state.state:
                 state.state = decision.new_state
 
+        if config.data.get("source") == "hyperliquid":
+            bar_date = row_t.get("date", row_t.name)
+            rate = (funding_rates or {}).get(bar_date, 0.0)
+            if state.current_position_contracts > 0 and rate != 0.0:
+                funding_payment = calc_funding_payment(
+                    rate,
+                    state.current_position_contracts,
+                    float(row_t["close"]),
+                    hours=bar_hours,
+                )
+                state = apply_funding_to_state(state, funding_payment)
+
         state_after = state.state.value
 
         # ── Step 5: log ────────────────────────────────────────────────────────
@@ -189,6 +205,7 @@ def run_backtest(
             trailing_stop_price=state.trailing_stop_price,
             gap_loss=gap_loss,
             fill_realized_pnl=fill_realized_pnl,
+            funding_payment=funding_payment,
         )
         records.append(rec)
 
@@ -220,6 +237,22 @@ def run_backtest(
     )
 
     return BacktestResult(records=records, metrics=metrics, final_state=state)
+
+
+def bar_interval_to_hours(interval: str) -> float:
+    """Convert supported bar interval strings to hours."""
+    mapping = {
+        "1m": 1.0 / 60.0,
+        "5m": 5.0 / 60.0,
+        "15m": 0.25,
+        "1h": 1.0,
+        "4h": 4.0,
+        "1d": 24.0,
+    }
+    try:
+        return mapping[interval]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported bar interval: {interval}") from exc
 
 
 def _make_warmup_record(row: Any, state: ThesisState, equity: float) -> BacktestRecord:

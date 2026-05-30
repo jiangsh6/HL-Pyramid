@@ -1,5 +1,5 @@
 """
-All 19 backtest metrics (Section 21.4).
+All backtest metrics (Section 21.4 + HL funding extension).
 
 compute_metrics(records, config) -> dict
 
@@ -30,6 +30,7 @@ class BacktestRecord:
     trailing_stop_price: Optional[float]
     gap_loss: bool                  # fill gapped below trailing stop
     fill_realized_pnl: float = 0.0  # realized PnL from Fill.realized_pnl (sell fills only)
+    funding_payment: float = 0.0    # negative = paid by long, positive = received
 
 
 def compute_metrics(
@@ -39,7 +40,7 @@ def compute_metrics(
     last_bar_price: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    Compute all 19 required metrics from the backtest record list.
+    Compute all required metrics from the backtest record list.
 
     Returns a flat dict with exactly the 19 keys listed in Section 21.4.
     """
@@ -60,6 +61,7 @@ def compute_metrics(
     exposures: List[float] = []
 
     realized_pnl         = 0.0   # running tally
+    funding_pnl          = 0.0
     peak_equity          = equity
     max_drawdown         = 0.0
     max_intraday_drawdown = 0.0
@@ -83,6 +85,8 @@ def compute_metrics(
         if rec.gap_loss:
             gap_loss_count += 1
 
+        funding_pnl += rec.funding_payment
+
         # PnL from fills (sells only).
         # Use fill_realized_pnl captured from Fill.realized_pnl at fill time.
         # This avoids the post-apply_fill avg_entry_price=None bug on full exits.
@@ -105,7 +109,7 @@ def compute_metrics(
             bars_in_market += 1
 
         # Equity curve / drawdown
-        current_equity = equity + realized_pnl
+        current_equity = equity + realized_pnl + funding_pnl
         if rec.shares > 0 and rec.avg_entry_price:
             unrealized = (rec.adj_close - rec.avg_entry_price) * rec.shares
             current_equity += unrealized
@@ -124,7 +128,7 @@ def compute_metrics(
     # ── aggregate statistics ──────────────────────────────────────────────────
     total_bars = len(records)
 
-    total_return = realized_pnl / equity if equity > 0 else 0.0
+    total_return = (realized_pnl + funding_pnl) / equity if equity > 0 else 0.0
 
     # Buy-and-hold: based on first / last bar adj_close
     bah_return = 0.0
@@ -165,6 +169,7 @@ def compute_metrics(
         "max_exposure":               max_exposure,
         "event_window_pnl":           event_window_pnl,
         "gap_loss_count":             gap_loss_count,
+        "funding_pnl":                funding_pnl,
     }
 
 
@@ -175,5 +180,5 @@ REQUIRED_METRIC_KEYS = frozenset([
     "number_of_take_profits", "number_of_stops",
     "win_rate", "average_win", "average_loss", "largest_loss", "profit_factor",
     "time_in_market", "average_exposure", "max_exposure",
-    "event_window_pnl", "gap_loss_count",
+    "event_window_pnl", "gap_loss_count", "funding_pnl",
 ])
