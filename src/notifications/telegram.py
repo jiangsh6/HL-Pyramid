@@ -92,6 +92,7 @@ def format_event(event: Mapping[str, Any]) -> str:
         return "\n".join([
             "HL heartbeat",
             f"timestamp={timestamp}",
+            f"run_id={_value(event.get('run_id'))}",
             f"network={_value(event.get('network'))}",
             f"coin={_value(event.get('coin'))}",
             f"state={_value(event.get('state'))}",
@@ -109,7 +110,12 @@ def format_event(event: Mapping[str, Any]) -> str:
         return "\n".join([
             "HL decision",
             f"timestamp={timestamp}",
+            f"run_id={_value(event.get('run_id'))}",
+            f"network={_value(event.get('network'))}",
             f"coin={_value(event.get('coin'))}",
+            f"state={_value(event.get('state'))}",
+            f"exchange_position_qty={_value(event.get('exchange_position_qty'))}",
+            f"local_position_qty={_value(event.get('local_position_qty'))}",
             f"decision={_value(event.get('decision'))}",
             f"reason={_value(event.get('reason'))}",
             f"state_before={_value(event.get('state_before'))}",
@@ -123,6 +129,12 @@ def format_event(event: Mapping[str, Any]) -> str:
         return "\n".join([
             "HL order",
             f"timestamp={timestamp}",
+            f"run_id={_value(event.get('run_id'))}",
+            f"network={_value(event.get('network'))}",
+            f"coin={_value(event.get('coin'))}",
+            f"state={_value(event.get('state'))}",
+            f"exchange_position_qty={_value(event.get('exchange_position_qty'))}",
+            f"local_position_qty={_value(event.get('local_position_qty'))}",
             f"status={_value(event.get('status'))}",
             f"action={_value(event.get('action'))}",
             f"reduce_only={_value(event.get('reduce_only'))}",
@@ -138,18 +150,38 @@ def format_event(event: Mapping[str, Any]) -> str:
         return "\n".join([
             "HL safety",
             f"timestamp={timestamp}",
+            f"run_id={_value(event.get('run_id'))}",
+            f"network={_value(event.get('network'))}",
             f"event={_value(event.get('event'))}",
             f"coin={_value(event.get('coin'))}",
             f"state={_value(event.get('state'))}",
+            f"exchange_position_qty={_value(event.get('exchange_position_qty'))}",
+            f"local_position_qty={_value(event.get('local_position_qty'))}",
             f"halted={_value(event.get('halted'))}",
             f"halt_reason={_value(event.get('halt_reason'))}",
             f"reason={_value(event.get('reason'))}",
+            f"config_path={_value(event.get('config_path'))}",
             f"dry_run={_value(event.get('dry_run'))}",
+        ])
+
+    if event_type == "summary":
+        return "\n".join([
+            "HL summary",
+            f"timestamp={timestamp}",
+            f"run_id={_value(event.get('run_id'))}",
+            f"network={_value(event.get('network'))}",
+            f"coin={_value(event.get('coin'))}",
+            f"state={_value(event.get('state'))}",
+            f"exchange_position_qty={_value(event.get('exchange_position_qty'))}",
+            f"local_position_qty={_value(event.get('local_position_qty'))}",
+            f"summary={_value(event.get('summary'))}",
         ])
 
     return "\n".join([
         "HL event",
         f"timestamp={timestamp}",
+        f"run_id={_value(event.get('run_id'))}",
+        f"network={_value(event.get('network'))}",
         f"type={event_type}",
         f"event={_value(event.get('event'))}",
         f"status={_value(event.get('status'))}",
