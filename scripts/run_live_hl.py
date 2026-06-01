@@ -23,7 +23,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 # Allow running as a script: project root must be on sys.path.
 _ROOT = Path(__file__).resolve().parent.parent
@@ -78,7 +78,10 @@ logging.basicConfig(
 _log = logging.getLogger("run_live_hl")
 
 _STOP_EVENT = threading.Event()
+_LOOP_LOCK = threading.Lock()
 _4H_SECONDS = 4 * 60 * 60
+DEFAULT_LOOP_INTERVAL_MINUTES = 240.0
+DEFAULT_PENDING_ORDER_MAX_AGE_MINUTES = 240.0
 HIGH_FUNDING_RATE_THRESHOLD = 0.0005
 CONTINUE = "CONTINUE"
 HALTED = "HALTED"
@@ -270,7 +273,10 @@ def pending_order_age_minutes(pending: PendingOrder, *, now: Optional[datetime] 
 
 
 def pending_order_max_age_minutes(config: BotConfig) -> Optional[float]:
-    raw = (config.execution or {}).get("pending_order_max_age_minutes")
+    raw = (config.execution or {}).get(
+        "pending_order_max_age_minutes",
+        DEFAULT_PENDING_ORDER_MAX_AGE_MINUTES,
+    )
     if raw is None:
         return None
     value = float(raw)
@@ -868,6 +874,152 @@ def run_decision_cycle(
         _log.error("daily summary generation failed: %s", exc)
 
     return STOPPED if _STOP_EVENT.is_set() else CONTINUE
+
+
+# ── Recurring loop / heartbeat ────────────────────────────────────────────────
+
+def loop_interval_minutes(config: BotConfig) -> float:
+    raw = (config.execution or {}).get("loop_interval_minutes", DEFAULT_LOOP_INTERVAL_MINUTES)
+    value = float(raw)
+    return value if value > 0 else DEFAULT_LOOP_INTERVAL_MINUTES
+
+
+def emit_heartbeat(
+    state: ThesisState,
+    *,
+    open_orders_count: Optional[int],
+    last_decision: Optional[str],
+    logger: Optional[logging.Logger] = None,
+    now: Optional[datetime] = None,
+) -> dict:
+    pending = state.pending_order
+    event = {
+        "timestamp": (now or datetime.now(timezone.utc)).isoformat(),
+        "state": state.state.value,
+        "position_qty": state.current_position_qty,
+        "open_orders_count": open_orders_count,
+        "pending_order_status": pending.status if pending is not None else None,
+        "pending_order_oid": pending.oid if pending is not None else None,
+        "last_decision": last_decision,
+    }
+    log = logger or _log
+    log.info(
+        "heartbeat timestamp=%s state=%s position_qty=%.8f open_orders_count=%s "
+        "pending_order_status=%s pending_order_oid=%s last_decision=%s",
+        event["timestamp"],
+        event["state"],
+        event["position_qty"],
+        event["open_orders_count"],
+        event["pending_order_status"],
+        event["pending_order_oid"],
+        event["last_decision"],
+    )
+    return event
+
+
+def _heartbeat_open_orders_count(
+    *,
+    wallet_address: str,
+    client: HyperliquidClient,
+    config: BotConfig,
+) -> Optional[int]:
+    try:
+        snapshot = get_account_snapshot(
+            wallet_address,
+            client,
+            collateral_mode=(config.hl or {}).get("collateral_mode", "unified"),
+            include_open_orders=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("Heartbeat account snapshot failed: %s", exc)
+        return None
+    return snapshot.open_orders_count
+
+
+def run_recurring_loop(
+    config: BotConfig,
+    state: ThesisState,
+    state_path: Path,
+    client: HyperliquidClient,
+    wallet_address: str,
+    private_key: str,
+    *,
+    feed: Optional[HLWebSocketFeed] = None,
+    dry_run: bool = False,
+    max_cycles: Optional[int] = None,
+    stop_event: Optional[threading.Event] = None,
+    sleep_fn: Optional[Callable[[float], None]] = None,
+) -> str:
+    """
+    Testable supervised loop foundation.
+
+    Each cycle reloads persisted state, lets run_decision_cycle reconcile and
+    execute, emits one heartbeat, then sleeps for the configured interval.
+    """
+    if not _LOOP_LOCK.acquire(blocking=False):
+        raise RuntimeError("recurring_loop_already_active")
+
+    stop = stop_event or _STOP_EVENT
+    sleeper = sleep_fn or time.sleep
+    interval_seconds = loop_interval_minutes(config) * 60.0
+    symbol = config.symbol.get("ticker", (config.hl or {}).get("coin", state.symbol))
+    cycles = 0
+    last_status = STOPPED
+
+    try:
+        if not state_path.exists():
+            write_state(state, str(state_path))
+        while not stop.is_set():
+            loaded_state, terminal = load_state_or_halt(str(state_path), symbol, logger=_log)
+            if terminal:
+                emit_heartbeat(
+                    loaded_state,
+                    open_orders_count=None,
+                    last_decision=HALTED,
+                )
+                stop.set()
+                return HALTED
+
+            state = loaded_state
+            last_status = run_decision_cycle(
+                config,
+                state,
+                state_path,
+                client,
+                wallet_address,
+                private_key,
+                feed=feed,
+                dry_run=dry_run,
+            )
+
+            try:
+                state = load_state_or_halt(str(state_path), symbol, logger=_log)[0]
+            except Exception:  # noqa: BLE001
+                pass
+
+            emit_heartbeat(
+                state,
+                open_orders_count=_heartbeat_open_orders_count(
+                    wallet_address=wallet_address,
+                    client=client,
+                    config=config,
+                ),
+                last_decision=last_status,
+            )
+
+            cycles += 1
+            if last_status != CONTINUE:
+                stop.set()
+                return last_status
+            if max_cycles is not None and cycles >= max_cycles:
+                return last_status
+            if stop.is_set():
+                break
+            sleeper(interval_seconds)
+
+        return STOPPED if stop.is_set() else last_status
+    finally:
+        _LOOP_LOCK.release()
 
 
 # ── Intraday monitor (stop checks on WS price) ────────────────────────────────

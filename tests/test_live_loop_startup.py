@@ -21,12 +21,16 @@ import pytest
 
 from scripts.run_live_hl import (
     CONTINUE,
+    STOPPED,
+    emit_heartbeat,
     next_4h_candle_close,
+    run_recurring_loop,
     run_intraday_monitor,
     startup_checks,
     _install_shutdown_handler,
 )
 from src.core.config_loader import load_config
+from src.core.models import PendingOrder, ThesisState
 from src.hl.ws_feed import HLWebSocketFeed
 
 HL_CONFIG_PATH = "config/btc_long_thesis.yaml"
@@ -181,3 +185,178 @@ def test_one_cycle_main_exits_without_starting_recurring_loop(monkeypatch, tmp_p
     feed_cls.assert_not_called()
     assert live_script._STOP_EVENT.is_set()
     live_script._STOP_EVENT.clear()
+
+
+def _loop_cfg(tmp_path):
+    cfg = load_config("config/mu_long_thesis.yaml")
+    cfg.bot["mode"] = "testnet"
+    cfg.data["source"] = "hyperliquid"
+    cfg.logging["run_dir"] = str(tmp_path / "run")
+    cfg.execution["loop_interval_minutes"] = 0.01
+    cfg.hl = {
+        "network": "testnet",
+        "coin": "BTC",
+        "wallet_address": TESTNET_WALLET,
+        "bar_interval": "4h",
+        "sz_decimals": 5,
+    }
+    return cfg
+
+
+def test_heartbeat_contains_required_fields(caplog):
+    from scripts import run_live_hl as live_script
+
+    state = ThesisState(
+        symbol="BTC",
+        pending_order=PendingOrder(
+            oid=123,
+            symbol="BTC",
+            action="sell_stop",
+            side="sell",
+            reduce_only=True,
+            qty=0.005,
+            qty_submitted=0.005,
+            qty_filled=0.0,
+            qty_remaining=0.005,
+            limit_px=70000.0,
+            status="submitted_unfilled",
+            created_at=datetime.now(timezone.utc),
+        ),
+    )
+
+    caplog.set_level("INFO", logger="run_live_hl")
+    heartbeat = emit_heartbeat(
+        state,
+        open_orders_count=1,
+        last_decision=live_script.BLOCKED_EXISTING_OPEN_ORDER,
+    )
+
+    assert heartbeat["timestamp"]
+    assert heartbeat["state"] == "FLAT"
+    assert heartbeat["position_qty"] == 0.0
+    assert heartbeat["open_orders_count"] == 1
+    assert heartbeat["pending_order_status"] == "submitted_unfilled"
+    assert heartbeat["last_decision"] == live_script.BLOCKED_EXISTING_OPEN_ORDER
+    assert "heartbeat timestamp=" in caplog.text
+    assert "open_orders_count=1" in caplog.text
+
+
+def test_recurring_loop_runs_single_cycle(monkeypatch, tmp_path):
+    from scripts import run_live_hl as live_script
+
+    cfg = _loop_cfg(tmp_path)
+    state = ThesisState(symbol="BTC")
+    state_path = tmp_path / "state.json"
+    calls = {"count": 0}
+
+    def fake_cycle(*args, **kwargs):
+        calls["count"] += 1
+        return CONTINUE
+
+    monkeypatch.setattr(live_script, "run_decision_cycle", fake_cycle)
+    monkeypatch.setattr(live_script, "_heartbeat_open_orders_count", lambda **kwargs: 0)
+    stop_event = threading.Event()
+
+    status = run_recurring_loop(
+        cfg,
+        state,
+        state_path,
+        MagicMock(),
+        TESTNET_WALLET,
+        FAKE_KEY,
+        max_cycles=1,
+        stop_event=stop_event,
+        sleep_fn=lambda seconds: None,
+    )
+
+    assert status == CONTINUE
+    assert calls["count"] == 1
+    assert not stop_event.is_set()
+
+
+def test_recurring_loop_runs_repeated_cycles(monkeypatch, tmp_path):
+    from scripts import run_live_hl as live_script
+
+    cfg = _loop_cfg(tmp_path)
+    state = ThesisState(symbol="BTC")
+    sleeps = []
+    calls = {"count": 0}
+
+    def fake_cycle(*args, **kwargs):
+        calls["count"] += 1
+        return CONTINUE
+
+    monkeypatch.setattr(live_script, "run_decision_cycle", fake_cycle)
+    monkeypatch.setattr(live_script, "_heartbeat_open_orders_count", lambda **kwargs: 0)
+
+    status = run_recurring_loop(
+        cfg,
+        state,
+        tmp_path / "state.json",
+        MagicMock(),
+        TESTNET_WALLET,
+        FAKE_KEY,
+        max_cycles=2,
+        stop_event=threading.Event(),
+        sleep_fn=lambda seconds: sleeps.append(seconds),
+    )
+
+    assert status == CONTINUE
+    assert calls["count"] == 2
+    assert sleeps == [0.6]
+
+
+def test_recurring_loop_shutdown_behavior(monkeypatch, tmp_path):
+    from scripts import run_live_hl as live_script
+
+    cfg = _loop_cfg(tmp_path)
+    state = ThesisState(symbol="BTC")
+    stop_event = threading.Event()
+    calls = {"count": 0}
+
+    def fake_cycle(*args, **kwargs):
+        calls["count"] += 1
+        return CONTINUE
+
+    def stop_after_sleep(seconds):
+        stop_event.set()
+
+    monkeypatch.setattr(live_script, "run_decision_cycle", fake_cycle)
+    monkeypatch.setattr(live_script, "_heartbeat_open_orders_count", lambda **kwargs: 0)
+
+    status = run_recurring_loop(
+        cfg,
+        state,
+        tmp_path / "state.json",
+        MagicMock(),
+        TESTNET_WALLET,
+        FAKE_KEY,
+        stop_event=stop_event,
+        sleep_fn=stop_after_sleep,
+    )
+
+    assert status == STOPPED
+    assert calls["count"] == 1
+
+
+def test_recurring_loop_prevents_duplicate_active_loop(tmp_path):
+    from scripts import run_live_hl as live_script
+
+    cfg = _loop_cfg(tmp_path)
+    acquired = live_script._LOOP_LOCK.acquire(blocking=False)
+    assert acquired
+    try:
+        with pytest.raises(RuntimeError, match="recurring_loop_already_active"):
+            run_recurring_loop(
+                cfg,
+                ThesisState(symbol="BTC"),
+                tmp_path / "state.json",
+                MagicMock(),
+                TESTNET_WALLET,
+                FAKE_KEY,
+                max_cycles=1,
+                stop_event=threading.Event(),
+                sleep_fn=lambda seconds: None,
+            )
+    finally:
+        live_script._LOOP_LOCK.release()
