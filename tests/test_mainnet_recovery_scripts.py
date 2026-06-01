@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts import cancel_hl_order, flatten_hl_position
+from scripts import cancel_hl_order, clear_false_hl_halt, flatten_hl_position
 from src.core.config_loader import load_config
 from src.core.models import (
     ActionType,
@@ -104,6 +104,103 @@ def _pending_exit() -> PendingOrder:
         status="submitted_unfilled",
         created_at=datetime.now(timezone.utc),
     )
+
+
+def test_clear_false_local_mismatch_halt_after_reduce_recovery_aligns():
+    state = _long_state()
+    state.state = BotState.HALTED
+    state.halted = True
+    state.halt_reason = "local_exchange_position_mismatch"
+    state.current_position_qty = 0.00656
+    state.addon_lots = [
+        LotRecord(
+            lot_id="add_1",
+            entry_price=72100.0,
+            qty=0.00156,
+            entry_date=date(2026, 6, 1),
+        )
+    ]
+    state.pending_order = None
+
+    cleared = cancel_hl_order.clear_false_local_mismatch_halt(
+        state,
+        exchange_qty=0.00656,
+        open_orders_count=0,
+    )
+
+    assert cleared is True
+    assert state.state == BotState.PYRAMID_LONG
+    assert state.halted is False
+    assert state.halt_reason is None
+
+
+def test_clear_false_local_mismatch_halt_refuses_mismatched_qty():
+    state = _long_state()
+    state.state = BotState.HALTED
+    state.halted = True
+    state.halt_reason = "local_exchange_position_mismatch"
+
+    cleared = cancel_hl_order.clear_false_local_mismatch_halt(
+        state,
+        exchange_qty=0.004,
+        open_orders_count=0,
+    )
+
+    assert cleared is False
+    assert state.state == BotState.HALTED
+    assert state.halted is True
+    assert state.halt_reason == "local_exchange_position_mismatch"
+
+
+def test_clear_false_local_mismatch_halt_refuses_pending_order():
+    state = _long_state()
+    state.state = BotState.HALTED
+    state.halted = True
+    state.halt_reason = "local_exchange_position_mismatch"
+    state.pending_order = _pending_exit()
+
+    cleared = cancel_hl_order.clear_false_local_mismatch_halt(
+        state,
+        exchange_qty=state.current_position_qty,
+        open_orders_count=0,
+    )
+
+    assert cleared is False
+    assert state.state == BotState.HALTED
+    assert state.pending_order is not None
+
+
+def test_clear_false_halt_script_clears_when_exchange_and_local_qty_match(tmp_path, monkeypatch, capsys):
+    cfg = _mainnet_cfg(tmp_path, monkeypatch)
+    cfg.bot["mode"] = "testnet"
+    cfg.hl["network"] = "testnet"
+    cfg.notifications["enabled"] = False
+    state = _long_state()
+    state.state = BotState.HALTED
+    state.halted = True
+    state.halt_reason = "local_exchange_position_mismatch"
+    write_state(state, str(tmp_path / "state.json"))
+    monkeypatch.setattr(clear_false_hl_halt, "load_config", lambda _: cfg)
+    monkeypatch.setattr(clear_false_hl_halt, "HyperliquidClient", lambda **_: object())
+    monkeypatch.setattr(clear_false_hl_halt, "get_account_snapshot", lambda *a, **kw: _snapshot(qty=0.005))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "clear_false_hl_halt.py",
+            "--config",
+            "ignored.yaml",
+            "--coin",
+            "BTC",
+            "--confirm",
+            "--one-cycle",
+        ],
+    )
+
+    rc = clear_false_hl_halt.main()
+
+    assert rc == 0
+    assert "CLEARED_FALSE_HALT" in capsys.readouterr().out
 
 
 def test_mainnet_recovery_guard_blocks_without_mainnet_flag(tmp_path, monkeypatch):

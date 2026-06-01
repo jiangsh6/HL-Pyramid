@@ -28,6 +28,7 @@ from src.core.models import (
     OrderResult,
     OrderResultStatus,
     ReconciliationStatus,
+    ThesisState,
 )
 from src.execution.operator_recovery import (
     DUST_EXIT_PENDING_ACTION,
@@ -62,6 +63,34 @@ def _mask(addr: str) -> str:
     if not addr or len(addr) < 10:
         return addr
     return addr[:6] + "..." + addr[-3:]
+
+
+def clear_false_local_mismatch_halt(
+    state: ThesisState,
+    *,
+    exchange_qty: float,
+    open_orders_count: int,
+) -> bool:
+    """Clear a conservative mismatch halt after exact fill recovery proves sync."""
+    if state.halt_reason != "local_exchange_position_mismatch":
+        return False
+    if state.pending_order is not None or open_orders_count != 0:
+        return False
+    if abs(state.current_position_qty - max(exchange_qty, 0.0)) > EPSILON:
+        return False
+
+    if state.current_position_qty <= EPSILON:
+        state.state = BotState.EXITED
+    elif state.addon_lots:
+        state.state = BotState.PYRAMID_LONG
+    elif state.runner_mode_active:
+        state.state = BotState.RUNNER_LONG
+    elif state.base_lot is not None:
+        state.state = BotState.BASE_LONG
+
+    state.halted = False
+    state.halt_reason = None
+    return True
 
 
 def _synthetic_indicators(mark_price: float) -> IndicatorSnapshot:
@@ -362,6 +391,14 @@ def main() -> int:
             status = OrderResultStatus.CANCELED
             print("ACTION=cancel_oid")
             print("result=" + result_text)
+            post_position = next((p for p in post.positions if p.coin == coin), None)
+            post_exchange_qty = post_position.qty if post_position is not None else 0.0
+            if post_fills_for_oid:
+                clear_false_local_mismatch_halt(
+                    state,
+                    exchange_qty=post_exchange_qty,
+                    open_orders_count=post.open_orders_count,
+                )
         else:
             state.state = BotState.HALTED
             state.halted = True
