@@ -266,7 +266,7 @@ def run(
             blockers.append(blocker)
 
     # Step 12: add
-    if (state.state in {BotState.BASE_LONG, BotState.PYRAMID_LONG}
+    if (state.state in {BotState.BASE_LONG, BotState.RUNNER_LONG, BotState.PYRAMID_LONG}
             and not state.protect_profit_mode
             and not daily_loss_blocks):
         d = check_add_conditions(state, indicators, config)

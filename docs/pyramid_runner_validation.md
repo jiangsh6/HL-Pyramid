@@ -3,7 +3,7 @@
 Objective:
 
 ```text
-RUNNER_LONG -> controlled add probe -> addon_lot created -> reconciliation clean
+RUNNER_LONG -> controlled add probe -> PYRAMID_LONG -> reconciliation clean
 ```
 
 Use existing scripts. Do not add strategy hacks or bypass lifecycle code.
@@ -66,7 +66,7 @@ Confirm:
 python scripts/probe_hl_add_order.py \
   --config config/btc_testnet_realistic_probe.yaml \
   --coin BTC \
-  --qty 0.002 \
+  --qty 0.005 \
   --confirm \
   --one-cycle
 ```
@@ -87,6 +87,8 @@ Expected fill behavior:
 - if filled: `addon_lot` is created through `apply_fill`
 - `add_count` increments only after fill
 - state becomes `PYRAMID_LONG`
+- `RUNNER_LONG` is explicitly eligible for add checks, but only through the same
+  risk budget, sizing, and pending-order blockers used by other long states
 
 ## Post-Add Validation
 

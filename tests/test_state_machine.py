@@ -44,6 +44,12 @@ def test_pyramid_to_pyramid_on_add():
     assert sm.current_state == BotState.PYRAMID_LONG
 
 
+def test_runner_to_pyramid_long_on_add():
+    sm = _sm(BotState.RUNNER_LONG)
+    sm.transition(BotState.PYRAMID_LONG)
+    assert sm.current_state == BotState.PYRAMID_LONG
+
+
 # ── Reduce transitions ───────────────────────────────────────────────────────
 
 def test_pyramid_to_reduce_mode():
@@ -239,7 +245,7 @@ def test_valid_transitions_matches_spec():
                              "EXITED", "HALTED"},
         "EVENT_RISK_MODE":  {"STARTER_LONG", "BASE_LONG", "PYRAMID_LONG",
                              "REDUCE_MODE", "RUNNER_LONG", "EXITED", "HALTED"},
-        "RUNNER_LONG":      {"EXITED", "HALTED"},
+        "RUNNER_LONG":      {"PYRAMID_LONG", "EXITED", "HALTED"},
         "EXITED":           {"FLAT"},
         "HALTED":           {"FLAT"},
     }

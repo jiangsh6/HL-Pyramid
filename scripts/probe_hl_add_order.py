@@ -196,7 +196,7 @@ def main() -> int:
     if state.pending_order is not None:
         print("STOPPED_BEFORE_ADD: local_pending_order_exists")
         return 1
-    if state.state not in {BotState.STARTER_LONG, BotState.BASE_LONG, BotState.PYRAMID_LONG}:
+    if state.state not in {BotState.STARTER_LONG, BotState.BASE_LONG, BotState.RUNNER_LONG, BotState.PYRAMID_LONG}:
         print("STOPPED_BEFORE_ADD: local_state_not_long")
         print("state=" + state.state.value)
         return 1

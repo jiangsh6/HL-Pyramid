@@ -41,7 +41,7 @@ No trading logic change was made in this audit. Coverage was added to lock the o
 | Runner activation decision | Target-price TP logic computes `runner_target_qty` from `original_base_qty` and returns `SELL_TAKE_PROFIT` with `new_state=RUNNER_LONG` | `src/strategy/take_profit.py` | `check_take_profit` |
 | Runner activation applied | Fill-confirmed sell leaves qty at or below runner target, then intended runner side effects are applied | `scripts/run_live_hl.py` | `run_decision_cycle` |
 | Target-runner probe activation | Controlled probe applies fill and enters runner only if filled qty brings position to runner target | `scripts/probe_hl_target_runner.py` | `apply_target_runner_order_result` |
-| Pyramid add decision | State is `BASE_LONG`/`PYRAMID_LONG`, add conditions pass, no protect-profit/daily-loss block, and add sizing succeeds | `src/core/decision_engine.py` | `run` |
+| Pyramid add decision | State is `BASE_LONG`/`RUNNER_LONG`/`PYRAMID_LONG`, add conditions pass, no protect-profit/daily-loss block, and add sizing succeeds | `src/core/decision_engine.py` | `run` |
 | Pyramid add blockers | Max add count, cooldowns, price step, MA checks, event window, exposure cap, or protect-profit mode | `src/strategy/add.py` | `check_add_conditions` |
 | Pyramid add risk budget | Remaining risk budget is computed before returning add qty | `src/strategy/sizing.py` | `calc_addon_size` |
 | Pyramid add state mutation | Confirmed buy add fill appends `addon_lot`, increments `add_count`, updates `last_add_price` | `src/reporting/state_writer.py` | `apply_fill` |
@@ -52,7 +52,7 @@ No trading logic change was made in this audit. Coverage was added to lock the o
 ## Safety Findings
 
 - Add-ons cannot bypass max add count because `check_add_conditions` emits `max_add_count_reached` before sizing.
-- Add-ons cannot bypass remaining risk budget because `decision_engine.run` calls `calc_addon_size` after add conditions pass and returns no action if sizing returns a blocker.
+- Add-ons cannot bypass remaining risk budget because `decision_engine.run` calls `calc_addon_size` after add conditions pass and returns no action if sizing returns a blocker, including when the source state is `RUNNER_LONG`.
 - Pending exit/reduce orders block normal strategy through `decision_engine._pending_order_is_exit_resolution_required`.
 - Runtime state mutation remains fill-confirmed through `OrderResult` handling and `state_writer.apply_fill`.
 - Reconciliation remains conservative and halts on ambiguous exchange/local mismatch.

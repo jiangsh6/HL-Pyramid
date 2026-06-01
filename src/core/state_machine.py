@@ -13,7 +13,7 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
                          "EXITED", "HALTED"},
     "EVENT_RISK_MODE":  {"STARTER_LONG", "BASE_LONG", "PYRAMID_LONG",
                          "REDUCE_MODE", "RUNNER_LONG", "EXITED", "HALTED"},
-    "RUNNER_LONG":      {"EXITED", "HALTED"},
+    "RUNNER_LONG":      {"PYRAMID_LONG", "EXITED", "HALTED"},
     "EXITED":           {"FLAT"},
     "HALTED":           {"FLAT"},
 }

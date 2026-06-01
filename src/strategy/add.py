@@ -18,7 +18,7 @@ def check_add_conditions(
     """
     add_cfg = config.add
 
-    if state.state not in {BotState.BASE_LONG, BotState.PYRAMID_LONG}:
+    if state.state not in {BotState.BASE_LONG, BotState.RUNNER_LONG, BotState.PYRAMID_LONG}:
         return None
     if not add_cfg.get("enabled", False):
         return None
