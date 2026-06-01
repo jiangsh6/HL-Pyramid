@@ -4,8 +4,11 @@ from datetime import datetime, timezone
 
 from scripts.flatten_hl_position import (
     RECOVERABLE_CLEANUP_EXIT_HALT_PREFIX,
+    RECOVERABLE_IOC_FLATTEN_HALT_REASON,
+    RECOVERABLE_IOC_NO_MATCH_EXIT_HALT_PREFIX,
     TARGET_RUNNER_VALIDATION_HALT_REASON,
     can_recover_cleanup_exit_halt,
+    can_recover_ioc_flatten_halt,
     can_recover_target_runner_validation_halt,
 )
 from src.core.models import BotState, PendingOrder, ThesisState
@@ -197,5 +200,44 @@ def test_target_runner_validation_halt_refuses_qty_mismatch():
         recover_flag=True,
         confirmed=True,
         open_orders_count=0,
+        exchange_qty=0.005,
+    )
+
+
+def test_ioc_flatten_halt_allows_exact_unfilled_reason():
+    state = _target_runner_halted_state(halt_reason=RECOVERABLE_IOC_FLATTEN_HALT_REASON)
+
+    assert can_recover_ioc_flatten_halt(
+        state=state,
+        network="testnet",
+        recover_flag=True,
+        confirmed=True,
+        open_orders_count=0,
+        exchange_qty=0.005,
+    )
+
+
+def test_ioc_flatten_halt_allows_no_match_rejection_reason():
+    state = _target_runner_halted_state(halt_reason=RECOVERABLE_IOC_NO_MATCH_EXIT_HALT_PREFIX + ". asset=3")
+
+    assert can_recover_ioc_flatten_halt(
+        state=state,
+        network="testnet",
+        recover_flag=True,
+        confirmed=True,
+        open_orders_count=0,
+        exchange_qty=0.005,
+    )
+
+
+def test_ioc_flatten_halt_refuses_open_orders():
+    state = _target_runner_halted_state(halt_reason=RECOVERABLE_IOC_FLATTEN_HALT_REASON)
+
+    assert not can_recover_ioc_flatten_halt(
+        state=state,
+        network="testnet",
+        recover_flag=True,
+        confirmed=True,
+        open_orders_count=1,
         exchange_qty=0.005,
     )

@@ -156,6 +156,10 @@ def _log_cleanup_cycle(
 
 
 RECOVERABLE_CLEANUP_EXIT_HALT_PREFIX = "cleanup_exit_failed:Price too far from oracle"
+RECOVERABLE_IOC_NO_MATCH_EXIT_HALT_PREFIX = (
+    "cleanup_exit_failed:Order could not immediately match against any resting orders"
+)
+RECOVERABLE_IOC_FLATTEN_HALT_REASON = "ioc_flatten_unfilled_position_still_open"
 TARGET_RUNNER_VALIDATION_HALT_REASON = "exit_order_canceled_position_still_open"
 
 
@@ -203,6 +207,34 @@ def can_recover_target_runner_validation_halt(
     )
 
 
+def can_recover_ioc_flatten_halt(
+    *,
+    state,
+    network: str,
+    recover_flag: bool,
+    confirmed: bool,
+    open_orders_count: int,
+    exchange_qty: float,
+) -> bool:
+    halt_reason = state.halt_reason or ""
+    return (
+        network == "testnet"
+        and recover_flag
+        and confirmed
+        and state.state == BotState.HALTED
+        and state.halted
+        and (
+            halt_reason == RECOVERABLE_IOC_FLATTEN_HALT_REASON
+            or halt_reason.startswith(RECOVERABLE_IOC_NO_MATCH_EXIT_HALT_PREFIX)
+        )
+        and state.pending_order is None
+        and open_orders_count == 0
+        and exchange_qty > EPSILON
+        and state.current_position_qty > EPSILON
+        and abs(state.current_position_qty - exchange_qty) <= EPSILON
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="One-cycle reduce-only HL testnet flatten probe")
     parser.add_argument("--config", required=True)
@@ -218,6 +250,16 @@ def main() -> int:
         "--recover-from-target-runner-validation-halt",
         action="store_true",
         help="Allow IOC flatten only from the Bundle 2 target-runner validation HALT.",
+    )
+    parser.add_argument(
+        "--recover-from-ioc-flatten-halt",
+        action="store_true",
+        help="Allow retry only from an IOC flatten no-match/unfilled HALT.",
+    )
+    parser.add_argument(
+        "--force-ioc-no-match-validation",
+        action="store_true",
+        help="Probe-only: intentionally price IOC sell above market to validate no-match handling.",
     )
     parser.add_argument("--time-in-force", choices=("gtc", "ioc"), default=None)
     parser.add_argument("--exit-aggressiveness-bps", type=float, default=None)
@@ -286,7 +328,15 @@ def main() -> int:
         open_orders_count=snapshot.open_orders_count,
         exchange_qty=exchange_qty,
     )
-    recover_from_halt = recover_from_cleanup_halt or recover_from_target_runner_halt
+    recover_from_ioc_flatten_halt = can_recover_ioc_flatten_halt(
+        state=state,
+        network=network,
+        recover_flag=args.recover_from_ioc_flatten_halt,
+        confirmed=args.confirm,
+        open_orders_count=snapshot.open_orders_count,
+        exchange_qty=exchange_qty,
+    )
+    recover_from_halt = recover_from_cleanup_halt or recover_from_target_runner_halt or recover_from_ioc_flatten_halt
     if state.halted and not recover_from_halt:
         print("STOPPED_BEFORE_EXIT: local_state_halted")
         print("halt_reason=" + str(state.halt_reason))
@@ -413,9 +463,13 @@ def main() -> int:
         )
     )
     time_in_force = args.time_in_force or str(config.execution.get("time_in_force", "gtc"))
+    if args.force_ioc_no_match_validation and time_in_force.lower() != "ioc":
+        print("STOPPED_BEFORE_EXIT: no_match_validation_requires_ioc")
+        return 1
+    pricing_mark_price = mark_price * 1.05 if args.force_ioc_no_match_validation else mark_price
     price_info = compute_oracle_safe_exit_price(
         "sell",
-        mark_price,
+        pricing_mark_price,
         None,
         sz_decimals,
         max_oracle_bps,
@@ -427,6 +481,7 @@ def main() -> int:
     print("max_deviation_bps=" + str(price_info.max_deviation_bps))
     print("exit_aggressiveness_bps=" + str(exit_aggr_bps))
     print("time_in_force=" + time_in_force)
+    print("force_ioc_no_match_validation=" + str(args.force_ioc_no_match_validation))
 
     execution_cfg = dict(config.execution)
     execution_cfg.update(
@@ -445,7 +500,7 @@ def main() -> int:
         client,
         wallet,
         private_key,
-        mark_price,
+        pricing_mark_price,
     )
     fill = _fill_from_order_result(order_result)
     risk_status = None
