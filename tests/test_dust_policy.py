@@ -4,6 +4,8 @@ import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from scripts import cleanup_hl_dust_position, flatten_hl_position, reset_state
 from src.core.config_loader import load_config
 from src.core.models import ActionType, BotState, LotRecord, OrderResult, OrderResultStatus, PendingOrder, ThesisState
@@ -247,6 +249,120 @@ def test_ioc_flatten_recovery_unfilled_leaves_no_pending_order(tmp_path, monkeyp
     assert persisted.halt_reason == "ioc_flatten_unfilled_position_still_open"
     assert persisted.pending_order is None
     assert persisted.current_position_qty == 0.005
+
+
+def test_ioc_flatten_partial_fill_does_not_record_pending_order(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    state_path = tmp_path / "state.json"
+    write_state(_target_runner_halted_state(), str(state_path))
+
+    def fake_execute(decision, state, config, client, wallet, private_key, mark_price):
+        assert config.execution["time_in_force"] == "ioc"
+        return OrderResult(
+            status=OrderResultStatus.PARTIALLY_FILLED,
+            action=ActionType.EXIT_ALL,
+            side="sell",
+            reduce_only=True,
+            submitted_qty=decision.qty,
+            filled_qty=0.002,
+            remaining_qty=max(decision.qty - 0.002, 0.0),
+            avg_fill_px=72000.0,
+            limit_px=72000.0,
+            raw_status_sanitized="partially_filled",
+            state_before=state.state.value,
+            intended_state_after=BotState.EXITED.value,
+            applied_state_after=state.state.value,
+            created_at=datetime.now(timezone.utc),
+        )
+
+    monkeypatch.setattr(flatten_hl_position, "load_config", lambda *_: cfg)
+    monkeypatch.setattr(flatten_hl_position, "get_private_key", lambda *_: "secret")
+    monkeypatch.setattr(flatten_hl_position, "HyperliquidClient", lambda **_: object())
+    monkeypatch.setattr(flatten_hl_position, "get_account_snapshot", lambda *a, **kw: _snapshot(position_qty=0.005))
+    monkeypatch.setattr(flatten_hl_position, "get_recent_user_fills", lambda *a, **kw: [])
+    monkeypatch.setattr(flatten_hl_position, "execute_hl", fake_execute)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "flatten_hl_position.py",
+            "--config",
+            "ignored.yaml",
+            "--coin",
+            "BTC",
+            "--recover-from-target-runner-validation-halt",
+            "--time-in-force",
+            "ioc",
+            "--confirm",
+            "--one-cycle",
+        ],
+    )
+
+    rc = flatten_hl_position.main()
+
+    persisted = read_state(str(state_path))
+    assert rc == 1
+    assert persisted.state == BotState.HALTED
+    assert persisted.halt_reason == "residual_position_after_ioc_emergency_exit"
+    assert persisted.pending_order is None
+    assert persisted.current_position_qty == pytest.approx(0.003)
+
+
+def test_flatten_aggressiveness_alias_overrides_legacy_aggressiveness(tmp_path, monkeypatch, capsys):
+    cfg = _cfg(tmp_path)
+    state_path = tmp_path / "state.json"
+    write_state(_target_runner_halted_state(), str(state_path))
+    observed = {}
+
+    def fake_execute(decision, state, config, client, wallet, private_key, mark_price):
+        observed["aggr"] = config.execution["exit_price_aggressiveness_bps"]
+        return OrderResult(
+            status=OrderResultStatus.SUBMITTED_UNFILLED,
+            action=ActionType.EXIT_ALL,
+            side="sell",
+            reduce_only=True,
+            submitted_qty=decision.qty,
+            filled_qty=0.0,
+            remaining_qty=decision.qty,
+            limit_px=72000.0,
+            raw_status_sanitized="submitted_unfilled",
+            state_before=state.state.value,
+            intended_state_after=BotState.EXITED.value,
+            applied_state_after=state.state.value,
+            created_at=datetime.now(timezone.utc),
+        )
+
+    monkeypatch.setattr(flatten_hl_position, "load_config", lambda *_: cfg)
+    monkeypatch.setattr(flatten_hl_position, "get_private_key", lambda *_: "secret")
+    monkeypatch.setattr(flatten_hl_position, "HyperliquidClient", lambda **_: object())
+    monkeypatch.setattr(flatten_hl_position, "get_account_snapshot", lambda *a, **kw: _snapshot(position_qty=0.005))
+    monkeypatch.setattr(flatten_hl_position, "get_recent_user_fills", lambda *a, **kw: [])
+    monkeypatch.setattr(flatten_hl_position, "execute_hl", fake_execute)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "flatten_hl_position.py",
+            "--config",
+            "ignored.yaml",
+            "--coin",
+            "BTC",
+            "--recover-from-target-runner-validation-halt",
+            "--time-in-force",
+            "ioc",
+            "--exit-aggressiveness-bps",
+            "2",
+            "--aggressiveness-bps",
+            "10",
+            "--confirm",
+            "--one-cycle",
+        ],
+    )
+
+    flatten_hl_position.main()
+
+    assert observed["aggr"] == pytest.approx(10.0)
+    assert "exit_aggressiveness_bps=10.0" in capsys.readouterr().out
 
 
 def test_reset_state_refuses_local_position(tmp_path, monkeypatch, capsys):

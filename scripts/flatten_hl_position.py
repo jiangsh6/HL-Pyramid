@@ -304,6 +304,7 @@ def main() -> int:
         help="Probe-only: intentionally price IOC sell above market to validate no-match handling.",
     )
     parser.add_argument("--time-in-force", choices=("gtc", "ioc"), default=None)
+    parser.add_argument("--aggressiveness-bps", type=float, default=None)
     parser.add_argument("--exit-aggressiveness-bps", type=float, default=None)
     parser.add_argument("--max-oracle-deviation-bps", type=float, default=None)
     parser.add_argument("--mainnet", action="store_true")
@@ -495,7 +496,9 @@ def main() -> int:
     print("reduce_only=True")
     print("exit_qty=" + decimal_to_plain_string(qty_dec))
     exit_aggr_bps = float(
-        args.exit_aggressiveness_bps
+        args.aggressiveness_bps
+        if args.aggressiveness_bps is not None
+        else args.exit_aggressiveness_bps
         if args.exit_aggressiveness_bps is not None
         else config.execution.get(
             "exit_price_aggressiveness_bps",
@@ -585,10 +588,15 @@ def main() -> int:
             order_result.applied_state_after = state.state.value
             risk_status = "ok"
         else:
-            state.pending_order = _pending_from_order_result(state, decision, order_result)
+            is_ioc = time_in_force.lower() == "ioc"
+            state.pending_order = None if is_ioc else _pending_from_order_result(state, decision, order_result)
             state.state = BotState.HALTED
             state.halted = True
-            state.halt_reason = "residual_position_after_emergency_exit"
+            state.halt_reason = (
+                "residual_position_after_ioc_emergency_exit"
+                if is_ioc
+                else "residual_position_after_emergency_exit"
+            )
             order_result.applied_state_after = state.state.value
             risk_status = "halted"
 
