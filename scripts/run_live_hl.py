@@ -1203,6 +1203,22 @@ def main(
     monitor_thread.start()
 
     try:
+        if "loop_interval_minutes" in (config.execution or {}):
+            status = run_recurring_loop(
+                config,
+                state,
+                state_path,
+                client,
+                wallet_address,
+                private_key,
+                feed=feed,
+                dry_run=dry_run,
+                stop_event=_STOP_EVENT,
+            )
+            if status != CONTINUE:
+                _log.warning("Recurring loop returned terminal status %s; stopping", status)
+            return
+
         while not _STOP_EVENT.is_set():
             target = next_4h_candle_close()
             wait_secs = (target - datetime.now(timezone.utc)).total_seconds()

@@ -187,6 +187,52 @@ def test_one_cycle_main_exits_without_starting_recurring_loop(monkeypatch, tmp_p
     live_script._STOP_EVENT.clear()
 
 
+def test_main_uses_configured_recurring_loop(monkeypatch, tmp_path):
+    from scripts import run_live_hl as live_script
+
+    cfg = load_config("config/mu_long_thesis.yaml")
+    cfg.bot["mode"] = "testnet"
+    cfg.data["source"] = "hyperliquid"
+    cfg.logging["run_dir"] = str(tmp_path / "run")
+    cfg.execution["loop_interval_minutes"] = 0.01
+    cfg.hl = {
+        "network": "testnet",
+        "coin": "BTC",
+        "wallet_address": TESTNET_WALLET,
+        "bar_interval": "4h",
+        "sz_decimals": 5,
+    }
+
+    monkeypatch.setattr(live_script, "load_config", lambda _: cfg)
+    monkeypatch.setattr(live_script, "startup_checks", lambda config: FAKE_KEY)
+    monkeypatch.setattr(live_script, "HyperliquidClient", lambda network: object())
+    monkeypatch.setattr(
+        live_script,
+        "load_state_or_halt",
+        lambda *args, **kwargs: (live_script.ThesisState(symbol="BTC"), False),
+    )
+    feed = MagicMock()
+    feed.get_latest_price.return_value = None
+    monkeypatch.setattr(live_script, "HLWebSocketFeed", lambda *args, **kwargs: feed)
+    loop = {"count": 0}
+
+    def fake_loop(*args, **kwargs):
+        loop["count"] += 1
+        live_script._STOP_EVENT.set()
+        return live_script.STOPPED
+
+    monkeypatch.setattr(live_script, "run_recurring_loop", fake_loop)
+    live_script._STOP_EVENT.clear()
+
+    live_script.main("unused.yaml", dry_run=True)
+
+    assert loop["count"] == 1
+    feed.start.assert_called_once()
+    feed.stop.assert_called_once()
+    assert live_script._STOP_EVENT.is_set()
+    live_script._STOP_EVENT.clear()
+
+
 def _loop_cfg(tmp_path):
     cfg = load_config("config/mu_long_thesis.yaml")
     cfg.bot["mode"] = "testnet"
