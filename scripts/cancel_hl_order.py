@@ -41,6 +41,7 @@ from src.hl.account import get_account_snapshot, get_recent_user_fills
 from src.hl.auth import get_private_key
 from src.hl.client import HyperliquidClient
 from src.hl.order_placer import cancel_order
+from src.notifications.telegram import TelegramNotifier, alert_toggle_enabled, notify_event
 from src.reporting.logger import log_cycle
 from src.reporting.state_writer import load_state_or_halt, mark_to_market_state, write_state
 
@@ -116,6 +117,30 @@ def _log(
         reconciliation_result=reconciliation_result,
         risk_status_override=risk_status_override,
     )
+
+
+def _notify_order_cancelled(config, state, order_result, exchange_qty) -> None:  # noqa: ANN001
+    if not alert_toggle_enabled(config.notifications or {}, "trade_alerts_enabled"):
+        return
+    notifier = TelegramNotifier.from_config(config.notifications or {})
+    event = {
+        "type": "semantic",
+        "event": "order_cancelled",
+        "run_id": str(config.bot.get("run_id") or "-"),
+        "network": str((config.hl or {}).get("network", config.bot.get("mode", "-"))),
+        "state_before": order_result.state_before,
+        "state_after": order_result.applied_state_after,
+        "order_id": order_result.oid,
+        "qty": order_result.submitted_qty,
+        "fill_qty": order_result.filled_qty,
+        "price": order_result.limit_px,
+        "exchange_position_qty": exchange_qty,
+        "local_position_qty": state.current_position_qty,
+    }
+    try:
+        notify_event(notifier, event)
+    except Exception:  # noqa: BLE001
+        return
 
 
 def main() -> int:
@@ -344,6 +369,9 @@ def main() -> int:
             risk_status_override=risk_status,
         )
         post_position = next((p for p in post.positions if p.coin == coin), None)
+        post_exchange_qty = post_position.qty if post_position is not None else 0.0
+        if ok:
+            _notify_order_cancelled(config, state, order_result, post_exchange_qty)
         print("post_exchange_qty=" + str(post_position.qty if post_position is not None else 0.0))
         print("post_open_orders_count=" + str(post.open_orders_count))
 

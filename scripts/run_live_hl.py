@@ -84,6 +84,10 @@ _log = logging.getLogger("run_live_hl")
 
 _STOP_EVENT = threading.Event()
 _LOOP_LOCK = threading.Lock()
+_PROCESS_RUN_ID = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+_ALERT_DEDUPE_TTL_SECONDS = 300.0
+_LAST_ALERT_TIMES: dict[str, float] = {}
+_CONNECTIVITY_LOST = False
 _4H_SECONDS = 4 * 60 * 60
 DEFAULT_LOOP_INTERVAL_MINUTES = 240.0
 DEFAULT_PENDING_ORDER_MAX_AGE_MINUTES = 240.0
@@ -414,6 +418,65 @@ def build_telegram_notifier(config: BotConfig) -> TelegramNotifier:
     return TelegramNotifier.from_config(config.notifications or {}, logger=_log)
 
 
+def _run_id(config: BotConfig) -> str:
+    return str(config.bot.get("run_id") or _PROCESS_RUN_ID)
+
+
+def _network(config: BotConfig) -> str:
+    return str((config.hl or {}).get("network", config.bot.get("mode", "-")))
+
+
+def _coin(config: BotConfig, fallback: str = "BTC") -> str:
+    return str((config.hl or {}).get("coin", config.symbol.get("ticker", fallback)))
+
+
+def _dedupe_key(event: dict) -> Optional[str]:
+    event_type = str(event.get("type") or "event")
+    if event_type in {"heartbeat"}:
+        return None
+    return "|".join(
+        str(event.get(key) or "")
+        for key in (
+            "type",
+            "event",
+            "status",
+            "action",
+            "oid",
+            "order_id",
+            "state",
+            "halt_reason",
+            "reason",
+        )
+    )
+
+
+def _alert_recently_sent(event: dict, *, now: Optional[float] = None) -> bool:
+    key = _dedupe_key(event)
+    if key is None:
+        return False
+    current = time.monotonic() if now is None else now
+    last = _LAST_ALERT_TIMES.get(key)
+    if last is not None and current - last < _ALERT_DEDUPE_TTL_SECONDS:
+        return True
+    _LAST_ALERT_TIMES[key] = current
+    return False
+
+
+def _alert_context(
+    *,
+    config: BotConfig,
+    state: Optional[ThesisState],
+    exchange_position_qty: Optional[float] = None,
+) -> dict:
+    return {
+        "run_id": _run_id(config),
+        "network": _network(config),
+        "state": state.state.value if state is not None else None,
+        "local_position_qty": state.current_position_qty if state is not None else None,
+        "exchange_position_qty": exchange_position_qty,
+    }
+
+
 def _safety_alert_enabled(config: BotConfig) -> bool:
     notifications = config.notifications or {}
     return bool(notifications.get("enabled", False)) and bool(notifications.get("telegram_enabled", False))
@@ -428,6 +491,15 @@ def _notify_if_enabled(
 ) -> None:
     enabled = _safety_alert_enabled(config) if toggle is None else alert_toggle_enabled(config.notifications or {}, toggle)
     if not enabled:
+        return
+    event = dict(event)
+    if _alert_recently_sent(event):
+        _log.info(
+            "telegram_notify_suppressed=true event_type=%s event=%s status=%s",
+            event.get("type"),
+            event.get("event"),
+            event.get("status"),
+        )
         return
     try:
         notify_event(notifier, event)
@@ -444,6 +516,7 @@ def _notify_safety(
     coin: str,
     dry_run: bool,
     reason: Optional[str] = None,
+    exchange_position_qty: Optional[float] = None,
 ) -> None:
     _notify_if_enabled(
         config=config,
@@ -451,9 +524,9 @@ def _notify_safety(
         toggle=None,
         event={
             "type": "safety",
+            **_alert_context(config=config, state=state, exchange_position_qty=exchange_position_qty),
             "event": event,
             "coin": coin,
-            "state": state.state.value,
             "halted": state.halted,
             "halt_reason": state.halt_reason,
             "reason": reason,
@@ -473,6 +546,8 @@ def _notify_decision(
     mark: Optional[float],
     oracle: Optional[float],
     dry_run: bool,
+    state: Optional[ThesisState] = None,
+    exchange_position_qty: Optional[float] = None,
 ) -> None:
     _notify_if_enabled(
         config=config,
@@ -480,6 +555,7 @@ def _notify_decision(
         toggle="decision_alerts_enabled",
         event={
             "type": "decision",
+            **_alert_context(config=config, state=state, exchange_position_qty=exchange_position_qty),
             "coin": coin,
             "decision": decision.action.value,
             "reason": decision.reason,
@@ -497,6 +573,9 @@ def _notify_order(
     config: BotConfig,
     notifier: TelegramNotifier,
     order_result: OrderResult,
+    state: ThesisState,
+    coin: str,
+    exchange_position_qty: Optional[float] = None,
 ) -> None:
     _notify_if_enabled(
         config=config,
@@ -504,6 +583,8 @@ def _notify_order(
         toggle="trade_alerts_enabled",
         event={
             "type": "order",
+            **_alert_context(config=config, state=state, exchange_position_qty=exchange_position_qty),
+            "coin": coin,
             "status": order_result.status.value,
             "action": order_result.action.value,
             "reduce_only": order_result.reduce_only,
@@ -515,6 +596,115 @@ def _notify_order(
             "remaining_qty": order_result.remaining_qty,
         },
     )
+
+
+def _notify_semantic(
+    *,
+    config: BotConfig,
+    notifier: TelegramNotifier,
+    event: str,
+    state_before: Optional[str],
+    state_after: Optional[str],
+    order_id: Optional[int] = None,
+    qty: Optional[float] = None,
+    fill_qty: Optional[float] = None,
+    price: Optional[float] = None,
+    exchange_position_qty: Optional[float] = None,
+    local_position_qty: Optional[float] = None,
+) -> None:
+    _notify_if_enabled(
+        config=config,
+        notifier=notifier,
+        toggle="trade_alerts_enabled",
+        event={
+            "type": "semantic",
+            "event": event,
+            "run_id": _run_id(config),
+            "network": _network(config),
+            "state_before": state_before,
+            "state_after": state_after,
+            "order_id": order_id,
+            "qty": qty,
+            "fill_qty": fill_qty,
+            "price": price,
+            "exchange_position_qty": exchange_position_qty,
+            "local_position_qty": local_position_qty,
+        },
+    )
+
+
+def _notify_fill_semantics(
+    *,
+    config: BotConfig,
+    notifier: TelegramNotifier,
+    decision: Decision,
+    order_result: OrderResult,
+    state_before: str,
+    state_before_qty: float,
+    state_after: ThesisState,
+    exchange_position_qty: Optional[float],
+) -> None:
+    price = order_result.avg_fill_px or order_result.limit_px
+    state_after_value = state_after.state.value
+    local_qty = state_after.current_position_qty
+    common = {
+        "config": config,
+        "notifier": notifier,
+        "state_before": state_before,
+        "state_after": state_after_value,
+        "order_id": order_result.oid,
+        "qty": order_result.submitted_qty,
+        "fill_qty": order_result.filled_qty,
+        "price": price,
+        "exchange_position_qty": exchange_position_qty,
+        "local_position_qty": local_qty,
+    }
+
+    if order_result.status == OrderResultStatus.PARTIALLY_FILLED:
+        _notify_semantic(event="partial_fill_detected", **common)
+    elif order_result.status == OrderResultStatus.FILLED:
+        _notify_semantic(event="full_fill_detected", **common)
+
+    if state_before_qty <= 1e-9 and local_qty > 1e-9:
+        _notify_semantic(event="position_opened", **common)
+    if state_before_qty > 1e-9 and local_qty <= 1e-9:
+        _notify_semantic(event="position_closed", **common)
+
+    if decision.action == ActionType.SELL_TAKE_PROFIT and order_result.status == OrderResultStatus.FILLED:
+        _notify_semantic(event="take_profit_filled", **common)
+    if decision.action in {ActionType.SELL_STOP, ActionType.SELL_TRAILING_STOP} and order_result.status == OrderResultStatus.FILLED:
+        _notify_semantic(event="stop_loss_filled", **common)
+    if decision.action == ActionType.EXIT_ALL and order_result.status == OrderResultStatus.FILLED:
+        _notify_semantic(event="emergency_exit_filled", **common)
+
+
+def _notify_summary(
+    *,
+    config: BotConfig,
+    notifier: TelegramNotifier,
+    state: ThesisState,
+    coin: str,
+    summary: str,
+    exchange_position_qty: Optional[float] = None,
+) -> None:
+    _notify_if_enabled(
+        config=config,
+        notifier=notifier,
+        toggle=None,
+        event={
+            "type": "summary",
+            **_alert_context(config=config, state=state, exchange_position_qty=exchange_position_qty),
+            "coin": coin,
+            "summary": summary[:3000],
+        },
+    )
+
+
+def _snapshot_position_qty(snapshot, coin: str) -> Optional[float]:  # noqa: ANN001
+    if snapshot is None:
+        return None
+    position = next((pos for pos in snapshot.positions if pos.coin == coin), None)
+    return position.qty if position is not None else 0.0
 
 
 # ── Main decision cycle (4h candle close) ─────────────────────────────────────
@@ -562,6 +752,7 @@ def run_decision_cycle(
     # collateral but is ignored under clearinghouse_only.
     hl_snapshot = None
     collateral_mode = hl_cfg.get("collateral_mode", "unified")
+    global _CONNECTIVITY_LOST
     try:
         hl_snapshot = get_account_snapshot(
             wallet_address,
@@ -569,8 +760,31 @@ def run_decision_cycle(
             collateral_mode=collateral_mode,
             include_open_orders=True,
         )
+        if _CONNECTIVITY_LOST:
+            _CONNECTIVITY_LOST = False
+            _notify_safety(
+                config=config,
+                notifier=notifier,
+                event="exchange_connectivity_restored",
+                state=state,
+                coin=coin,
+                dry_run=dry_run,
+                reason="account_snapshot_restored",
+                exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
+            )
     except Exception as exc:  # noqa: BLE001
         _log.warning("Could not fetch HL account snapshot: %s", exc)
+        if not _CONNECTIVITY_LOST:
+            _CONNECTIVITY_LOST = True
+            _notify_safety(
+                config=config,
+                notifier=notifier,
+                event="exchange_connectivity_lost",
+                state=state,
+                coin=coin,
+                dry_run=dry_run,
+                reason=type(exc).__name__,
+            )
 
     equity = float(config.capital.get("starting_equity", 0))
     if hl_snapshot is not None and hl_snapshot.account_value > 0:
@@ -642,11 +856,12 @@ def run_decision_cycle(
                 _notify_safety(
                     config=config,
                     notifier=notifier,
-                    event=reconcile_result.halt_reason or reconcile_result.reason,
+                    event="reconciliation_failed",
                     state=state,
                     coin=coin,
                     dry_run=dry_run,
-                    reason=reconcile_result.reason,
+                    reason=reconcile_result.halt_reason or reconcile_result.reason,
+                    exchange_position_qty=reconcile_result.exchange_position_qty,
                 )
                 _STOP_EVENT.set()
                 return HALTED
@@ -659,8 +874,19 @@ def run_decision_cycle(
                     coin=coin,
                     dry_run=dry_run,
                     reason=reconcile_result.reason,
+                    exchange_position_qty=reconcile_result.exchange_position_qty,
                 )
                 return BLOCKED_EXISTING_OPEN_ORDER
+            _notify_safety(
+                config=config,
+                notifier=notifier,
+                event="reconciliation_recovered",
+                state=state,
+                coin=coin,
+                dry_run=dry_run,
+                reason=f"{reconcile_result.status.value}:{reconcile_result.reason}",
+                exchange_position_qty=reconcile_result.exchange_position_qty,
+            )
             return RECONCILED
         if stale_pending:
             write_state(state, str(state_path))
@@ -692,6 +918,46 @@ def run_decision_cycle(
         mark=None,
         oracle=None,
         dry_run=dry_run,
+        state=state,
+        exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
+    )
+    if decision.action == ActionType.SELL_TAKE_PROFIT:
+        _notify_semantic(
+            config=config,
+            notifier=notifier,
+            event="take_profit_triggered",
+            state_before=state_before,
+            state_after=state.state.value,
+            qty=decision.qty,
+            price=indicators.close or indicators.adj_close,
+            exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
+            local_position_qty=state.current_position_qty,
+        )
+    if decision.action in {ActionType.SELL_STOP, ActionType.SELL_TRAILING_STOP}:
+        _notify_semantic(
+            config=config,
+            notifier=notifier,
+            event="stop_loss_triggered",
+            state_before=state_before,
+            state_after=state.state.value,
+            qty=decision.qty,
+            price=indicators.close or indicators.adj_close,
+            exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
+            local_position_qty=state.current_position_qty,
+        )
+    if (
+        decision.action == ActionType.NO_ACTION
+        and "max_add_count_reached" in (decision.blockers or [])
+    ):
+        _notify_safety(
+            config=config,
+            notifier=notifier,
+            event="max_pyramid_reached",
+            state=state,
+            coin=coin,
+            dry_run=dry_run,
+            reason=decision.reason,
+            exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
     )
     _sync_observation_state(
         state,
@@ -795,7 +1061,14 @@ def run_decision_cycle(
                     created_at=datetime.now(timezone.utc),
                 )
             action_class = classify_action(decision.action)
-            _notify_order(config=config, notifier=notifier, order_result=order_result)
+            _notify_order(
+                config=config,
+                notifier=notifier,
+                order_result=order_result,
+                state=state,
+                coin=coin,
+                exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
+            )
             if decision.action == ActionType.EXIT_ALL:
                 _notify_safety(
                     config=config,
@@ -805,6 +1078,7 @@ def run_decision_cycle(
                     coin=coin,
                     dry_run=dry_run,
                     reason=decision.reason,
+                    exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
                 )
 
             if order_result.status == OrderResultStatus.EXECUTION_ERROR:
@@ -836,6 +1110,7 @@ def run_decision_cycle(
                     coin=coin,
                     dry_run=dry_run,
                     reason=state.halt_reason,
+                    exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
                 )
                 _STOP_EVENT.set()
                 return EXECUTION_ERROR
@@ -863,6 +1138,7 @@ def run_decision_cycle(
                     coin=coin,
                     dry_run=dry_run,
                     reason=state.halt_reason,
+                    exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
                 )
                 _STOP_EVENT.set()
                 return HALTED
@@ -917,6 +1193,7 @@ def run_decision_cycle(
                     coin=coin,
                     dry_run=dry_run,
                     reason=order_result.exchange_error_sanitized or order_result.raw_status_sanitized,
+                    exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
                 )
                 return CONTINUE
 
@@ -959,12 +1236,14 @@ def run_decision_cycle(
                     coin=coin,
                     dry_run=dry_run,
                     reason=state.halt_reason,
+                    exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
                 )
                 _STOP_EVENT.set()
                 return HALTED
 
             if order_result.filled_qty > 0:
                 fill = _order_result_to_fill(order_result)
+                state_before_qty = state.current_position_qty
                 if fill is not None:
                     state = apply_fill(state, fill)
                 apply_intended_state = False
@@ -999,6 +1278,42 @@ def run_decision_cycle(
                 else:
                     state.pending_order = None
                     order_result.applied_state_after = state.state.value
+                _notify_fill_semantics(
+                    config=config,
+                    notifier=notifier,
+                    decision=decision,
+                    order_result=order_result,
+                    state_before=state_before,
+                    state_before_qty=state_before_qty,
+                    state_after=state,
+                    exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
+                )
+                if decision.action == ActionType.BUY_ADDON and order_result.filled_qty > 0:
+                    _notify_safety(
+                        config=config,
+                        notifier=notifier,
+                        event="pyramid_level_added",
+                        state=state,
+                        coin=coin,
+                        dry_run=dry_run,
+                        reason=f"filled_qty={order_result.filled_qty}",
+                        exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
+                    )
+                if (
+                    state.state == BotState.RUNNER_LONG
+                    and state.runner_mode_active
+                    and state.target_price_tp_triggered
+                ):
+                    _notify_safety(
+                        config=config,
+                        notifier=notifier,
+                        event="runner_activated",
+                        state=state,
+                        coin=coin,
+                        dry_run=dry_run,
+                        reason=f"runner_target_qty={state.runner_target_qty}",
+                        exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
+                    )
                 if is_residual_emergency_exit(order_result) or (
                     action_class == ActionClass.EMERGENCY_EXIT
                     and state.current_position_qty > 1e-9
@@ -1043,6 +1358,7 @@ def run_decision_cycle(
                         coin=coin,
                         dry_run=dry_run,
                         reason=state.halt_reason,
+                        exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
                     )
                     _STOP_EVENT.set()
                     return HALTED
@@ -1081,6 +1397,7 @@ def run_decision_cycle(
             coin=coin,
             dry_run=dry_run,
             reason=state.halt_reason,
+            exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
         )
         _STOP_EVENT.set()
         return HALTED
@@ -1123,6 +1440,14 @@ def run_decision_cycle(
             blockers=decision.blockers,
         )
         _log.info("Daily summary:\n%s", summary)
+        _notify_summary(
+            config=config,
+            notifier=notifier,
+            state=state,
+            coin=coin,
+            summary=summary,
+            exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
+        )
     except Exception as exc:  # noqa: BLE001
         _log.error("daily summary generation failed: %s", exc)
 
@@ -1286,7 +1611,7 @@ def run_recurring_loop(
                     config=config,
                     notifier=notifier,
                     toggle="heartbeat_enabled",
-                    event={"type": "heartbeat", **heartbeat},
+                    event={"type": "heartbeat", "run_id": _run_id(config), **heartbeat},
                 )
                 stop.set()
                 return HALTED
@@ -1327,7 +1652,7 @@ def run_recurring_loop(
                 config=config,
                 notifier=notifier,
                 toggle="heartbeat_enabled",
-                event={"type": "heartbeat", **heartbeat},
+                event={"type": "heartbeat", "run_id": _run_id(config), **heartbeat},
             )
 
             cycles += 1
@@ -1457,6 +1782,8 @@ def main(
 ) -> None:
     _log.info("Loading config from %s", config_path)
     config = load_config(config_path)
+    config.bot.setdefault("run_id", _run_id(config))
+    notifier = build_telegram_notifier(config)
 
     if mainnet:
         try:
@@ -1506,6 +1833,15 @@ def main(
         return
     _log.info("Loaded state (state=%s, qty=%.6f)",
               state.state.value, state.current_position_qty)
+    _notify_safety(
+        config=config,
+        notifier=notifier,
+        event="bot_startup",
+        state=state,
+        coin=coin,
+        dry_run=dry_run,
+        reason=f"config={config_path}",
+    )
 
     if config.hl and state.sz_decimals == 0:
         state.sz_decimals = int(config.hl.get("sz_decimals", 0) or 0)
@@ -1516,10 +1852,20 @@ def main(
             status = run_decision_cycle(
                 config, state, state_path, client,
                 wallet_address, private_key, feed=None, dry_run=dry_run,
+                notifier=notifier,
             )
             _log.info("One-cycle decision finished with status %s", status)
         finally:
             _STOP_EVENT.set()
+            _notify_safety(
+                config=config,
+                notifier=notifier,
+                event="bot_shutdown",
+                state=state,
+                coin=coin,
+                dry_run=dry_run,
+                reason="one_cycle_complete",
+            )
         return
 
     # Start WS feed + intraday monitor with full state-aware stop checks
@@ -1555,6 +1901,7 @@ def main(
                 feed=feed,
                 dry_run=dry_run,
                 stop_event=_STOP_EVENT,
+                notifier=notifier,
             )
             if status != CONTINUE:
                 _log.warning("Recurring loop returned terminal status %s; stopping", status)
@@ -1577,6 +1924,7 @@ def main(
                 status = run_decision_cycle(
                     config, state, state_path, client,
                     wallet_address, private_key, feed=feed, dry_run=dry_run,
+                    notifier=notifier,
                 )
                 if status != CONTINUE:
                     _log.warning("Decision cycle returned terminal status %s; stopping", status)
@@ -1590,6 +1938,19 @@ def main(
         _log.info("Shutting down — stopping WS feed")
         feed.stop()
         monitor_thread.join(timeout=10)
+        try:
+            latest_state, _ = load_state_or_halt(str(state_path), config.symbol.get("ticker", coin), logger=_log)
+        except Exception:  # noqa: BLE001
+            latest_state = state
+        _notify_safety(
+            config=config,
+            notifier=notifier,
+            event="bot_shutdown",
+            state=latest_state,
+            coin=coin,
+            dry_run=dry_run,
+            reason="live_loop_stopped",
+        )
         _log.info("Shutdown complete")
 
 

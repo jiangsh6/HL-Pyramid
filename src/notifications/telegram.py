@@ -24,6 +24,14 @@ def _value(value: Any) -> str:
     return str(value)
 
 
+def _semantic_value(value: Any) -> str:
+    if value is None:
+        return "unknown"
+    if isinstance(value, float):
+        return f"{value:.8g}"
+    return str(value)
+
+
 def alert_toggle_enabled(config: Mapping[str, Any], key: str) -> bool:
     if not bool(config.get("enabled", False)):
         return False
@@ -206,6 +214,23 @@ def format_event(event: Mapping[str, Any]) -> str:
             f"exchange_position_qty={_value(event.get('exchange_position_qty'))}",
             f"local_position_qty={_value(event.get('local_position_qty'))}",
             f"summary={_value(event.get('summary'))}",
+        ])
+
+    if event_type == "semantic":
+        return "\n".join([
+            "HL semantic",
+            f"event={_semantic_value(event.get('event'))}",
+            f"timestamp={timestamp}",
+            f"run_id={_semantic_value(event.get('run_id'))}",
+            f"network={_semantic_value(event.get('network'))}",
+            f"state_before={_semantic_value(event.get('state_before'))}",
+            f"state_after={_semantic_value(event.get('state_after'))}",
+            f"order_id={_semantic_value(event.get('order_id'))}",
+            f"qty={_semantic_value(event.get('qty'))}",
+            f"fill_qty={_semantic_value(event.get('fill_qty'))}",
+            f"price={_semantic_value(event.get('price'))}",
+            f"exchange_position_qty={_semantic_value(event.get('exchange_position_qty'))}",
+            f"local_position_qty={_semantic_value(event.get('local_position_qty'))}",
         ])
 
     return "\n".join([
