@@ -255,6 +255,32 @@ def test_live_price_helper_extracts_mark_and_oracle():
     client.post_info.assert_called_once_with({"type": "metaAndAssetCtxs"})
 
 
+def test_live_price_helper_falls_back_to_oracle_when_mark_missing():
+    client = Mock()
+    client.post_info.return_value = [
+        {"universe": [{"name": "BTC"}]},
+        [{"oraclePx": "73120.1"}],
+    ]
+
+    mark_px, oracle_px = get_live_probe_prices(client, "BTC")
+
+    assert mark_px is None
+    assert oracle_px == 73120.1
+
+
+def test_live_price_helper_fails_safely_when_mark_and_oracle_missing():
+    client = Mock()
+    client.post_info.return_value = [
+        {"universe": [{"name": "BTC"}]},
+        [{}],
+    ]
+
+    mark_px, oracle_px = get_live_probe_prices(client, "BTC")
+
+    assert mark_px is None
+    assert oracle_px is None
+
+
 def test_aggressive_sell_target_price_is_below_live_mark(monkeypatch):
     monkeypatch.setenv("HL_TESTNET_ACCOUNT_ADDRESS", "0x0000000000000000000000000000000000000000")
     config = load_config("config/btc_testnet_realistic_probe.yaml")
@@ -276,6 +302,25 @@ def test_aggressive_sell_target_price_is_below_live_mark(monkeypatch):
     assert pricing["formatted_probe_px"] < 72380.0
     assert pricing["formatted_probe_px"] <= pricing["raw_probe_px"]
     assert pricing["probe_config"].execution["time_in_force"] == "ioc"
+
+
+def test_cross_sell_target_price_respects_oracle_cap(monkeypatch):
+    monkeypatch.setenv("HL_TESTNET_ACCOUNT_ADDRESS", "0x0000000000000000000000000000000000000000")
+    config = load_config("config/btc_testnet_realistic_probe.yaml")
+
+    pricing = resolve_probe_target_runner_pricing(
+        config=config,
+        mark_price=72380.0,
+        oracle_price=73748.0,
+        sz_decimals=3,
+        pricing_mode="cross",
+        aggressiveness_bps=25,
+        max_oracle_deviation_bps=20,
+        max_aggressiveness_bps=30,
+        time_in_force="ioc",
+    )
+
+    assert pricing["blocker"] == "target_runner_cross_exceeds_max_oracle_deviation"
 
 
 def test_ioc_target_runner_unfilled_does_not_transition():
