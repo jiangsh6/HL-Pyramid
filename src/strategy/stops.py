@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from src.core.models import BotConfig, IndicatorSnapshot, ThesisState
+from src.core.models import EPSILON, BotConfig, IndicatorSnapshot, ThesisState
 
 
 def calc_initial_stop(entry_price: float, atr14: float, config: BotConfig) -> float:
@@ -41,7 +41,7 @@ def update_trailing_stop(
     Mutates state.highest_price_since_entry and state.trailing_stop_price.
     Trailing stop is never lowered.
     """
-    if state.current_position_shares <= 0:
+    if state.current_position_qty <= EPSILON:
         return
 
     state.highest_price_since_entry = max(
@@ -64,7 +64,7 @@ def check_stop_triggers(
     Returns "hard_stop", "trailing_stop", or None.
     Uses adj_close (not intraday low) per Section 16.2.
     """
-    if state.current_position_shares <= 0:
+    if state.current_position_qty <= EPSILON:
         return None
     if state.initial_stop_price is not None and indicators.adj_close <= state.initial_stop_price:
         return "hard_stop"
@@ -82,12 +82,12 @@ def check_intraday_drawdown(
     Section 8.2 / 16.3 — intraday-only check.
     Returns True if intraday drawdown breaches the halt threshold.
     """
-    if state.current_position_shares <= 0:
+    if state.current_position_qty <= EPSILON:
         return False
     avg = state.avg_entry_price or 0.0
     if avg <= 0:
         return False
     starting = config.capital["starting_equity"]
-    intraday_pnl = (current_price - avg) * state.current_position_shares
+    intraday_pnl = (current_price - avg) * state.current_position_qty
     max_dd_pct = config.risk["max_loss"]["max_intraday_drawdown_pct_of_equity"]
     return (intraday_pnl / starting) <= -max_dd_pct

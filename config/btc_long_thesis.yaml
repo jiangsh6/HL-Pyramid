@@ -224,7 +224,6 @@ execution:
   retry_count: 2
   retry_delay_seconds: 3
   partial_fill_policy: accept_partial_then_reprice
-  round_lot_size: 1
 
 data:
   source: hyperliquid
@@ -263,7 +262,9 @@ hl:
   network: testnet                   # Decision 1: testnet-first always
   coin: BTC                          # Hyperliquid asset name
   bar_interval: 4h                   # Must match data.bar_interval
-  wallet_address: "0x0000000000000000000000000000000000000000"  # Replace with real address
-  key_env_var: HL_PRIVATE_KEY        # Decision 2: key from env var for testnet
+  wallet_address: "ENV"              # Resolves from HL_TESTNET_ACCOUNT_ADDRESS
+  wallet_env_var: HL_TESTNET_ACCOUNT_ADDRESS
+  key_env_var: HL_TESTNET_AGENT_PRIVATE_KEY
+  collateral_mode: unified           # Spot USDC is valid unified trading collateral
   sz_decimals: 3                     # BTC contracts to 3 d.p. (0.001 BTC min)
   min_size: 0.001                    # Minimum order size in BTC contracts

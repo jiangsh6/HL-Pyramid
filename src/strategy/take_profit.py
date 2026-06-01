@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import math
 from typing import Optional
 
 from src.core.models import (
-    ActionType, BotConfig, BotState, Decision, IndicatorSnapshot, ThesisState,
+    EPSILON, ActionType, BotConfig, BotState, Decision, IndicatorSnapshot, ThesisState,
 )
 from src.strategy.reduce import drawdown_from_peak
 
@@ -35,7 +34,7 @@ def check_layered_tp(
     current profit, and raises state.trailing_stop_price per move_stop_to.
     Returns a Decision only for the highest *newly* triggered level.
     """
-    if state.current_position_shares <= 0:
+    if state.current_position_qty <= EPSILON:
         return None
     lp = config.take_profit.get("layered_profit", {})
     if not lp.get("enabled", False):
@@ -59,8 +58,8 @@ def check_layered_tp(
             state.tp_levels_triggered[i] = True
 
     lvl = levels[highest_newly_triggered]
-    shares_to_sell = math.floor(lvl["reduce_pct_of_total_position"] * state.current_position_shares)
-    if shares_to_sell <= 0:
+    qty_to_sell = lvl["reduce_pct_of_total_position"] * state.current_position_qty
+    if qty_to_sell <= EPSILON:
         return None
 
     # Trailing-stop ratchet
@@ -73,7 +72,7 @@ def check_layered_tp(
 
     return Decision(
         action=ActionType.SELL_TAKE_PROFIT,
-        shares=shares_to_sell,
+        qty=qty_to_sell,
         reason=f"layered_tp_level_{highest_newly_triggered + 1}",
         indicators=indicators,
     )
@@ -85,7 +84,7 @@ def check_target_tp(
     config: BotConfig,
 ) -> Optional[Decision]:
     """Section 14.2."""
-    if state.current_position_shares <= 0:
+    if state.current_position_qty <= EPSILON:
         return None
     if state.target_price_tp_triggered:
         return None
@@ -105,31 +104,42 @@ def check_target_tp(
 
     runner_cfg = config.take_profit.get("runner_mode", {})
     if runner_cfg.get("enabled", False) and state.base_lot is not None:
+        if state.original_base_qty <= EPSILON:
+            state.state = BotState.HALTED
+            state.halted = True
+            state.halt_reason = "original_base_qty_missing_for_runner"
+            return Decision(
+                action=ActionType.HALT,
+                qty=0.0,
+                reason="original_base_qty_missing_for_runner",
+                new_state=BotState.HALTED,
+                indicators=indicators,
+            )
         runner_pct = runner_cfg.get("runner_position_pct_of_original_base", 0.25)
-        runner_target_shares = math.floor(state.base_lot.shares * runner_pct)
-        state.runner_target_shares = runner_target_shares
+        runner_target_qty = state.original_base_qty * runner_pct
+        state.runner_target_qty = runner_target_qty
         state.runner_mode_active = True
         # Tight trailing stop
         tight_pct = runner_cfg.get("trailing_stop_pct", 0.08)
         state.trailing_stop_price = indicators.adj_close * (1 - tight_pct)
-        shares_to_sell = state.current_position_shares - runner_target_shares
-        if shares_to_sell <= 0:
-            shares_to_sell = state.current_position_shares
+        qty_to_sell = state.current_position_qty - runner_target_qty
+        if qty_to_sell <= EPSILON:
+            qty_to_sell = state.current_position_qty
         return Decision(
             action=ActionType.SELL_TAKE_PROFIT,
-            shares=shares_to_sell,
+            qty=qty_to_sell,
             reason="target_tp_runner_mode",
             new_state=BotState.RUNNER_LONG,
             indicators=indicators,
         )
 
     reduce_pct = tp_cfg.get("reduce_pct_of_remaining_position", 0.50)
-    shares_to_sell = math.floor(reduce_pct * state.current_position_shares)
-    if shares_to_sell <= 0:
+    qty_to_sell = reduce_pct * state.current_position_qty
+    if qty_to_sell <= EPSILON:
         return None
     return Decision(
         action=ActionType.SELL_TAKE_PROFIT,
-        shares=shares_to_sell,
+        qty=qty_to_sell,
         reason="target_tp",
         indicators=indicators,
     )
@@ -141,25 +151,25 @@ def check_exposure_tp(
     config: BotConfig,
 ) -> Optional[Decision]:
     """Section 14.3 — hard cap only triggers sell (soft cap blocks adds, handled in add.py)."""
-    if state.current_position_shares <= 0:
+    if state.current_position_qty <= EPSILON:
         return None
     etp = config.take_profit.get("exposure_take_profit", {})
     if not etp.get("enabled", False):
         return None
 
     starting = config.capital["starting_equity"]
-    current_exposure_pct = (state.current_position_shares * indicators.adj_close) / starting
+    current_exposure_pct = (state.current_position_qty * indicators.adj_close) / starting
     hard_cap = etp.get("hard_exposure_cap_pct", 1.00)
     reduce_to = etp.get("reduce_to_exposure_pct", 0.70)
 
     if current_exposure_pct >= hard_cap:
         target_notional = reduce_to * starting
-        target_shares = math.floor(target_notional / indicators.adj_close)
-        shares_to_sell = state.current_position_shares - target_shares
-        if shares_to_sell > 0:
+        target_qty = target_notional / indicators.adj_close
+        qty_to_sell = state.current_position_qty - target_qty
+        if qty_to_sell > EPSILON:
             return Decision(
                 action=ActionType.SELL_TAKE_PROFIT,
-                shares=shares_to_sell,
+                qty=qty_to_sell,
                 reason="exposure_tp_hard_cap",
                 indicators=indicators,
             )
@@ -172,7 +182,7 @@ def check_giveback_tp(
     config: BotConfig,
 ) -> Optional[Decision]:
     """Section 14.4."""
-    if state.current_position_shares <= 0:
+    if state.current_position_qty <= EPSILON:
         return None
     gb = config.take_profit.get("profit_giveback", {})
     if not gb.get("enabled", False):
@@ -183,7 +193,7 @@ def check_giveback_tp(
     if avg <= 0:
         return None
 
-    unrealized_pnl = (indicators.adj_close - avg) * state.current_position_shares
+    unrealized_pnl = (indicators.adj_close - avg) * state.current_position_qty
     unrealized_pct = unrealized_pnl / starting
 
     state.peak_unrealized_pnl_pct = max(state.peak_unrealized_pnl_pct, unrealized_pct)
@@ -200,15 +210,15 @@ def check_giveback_tp(
     for tier in tiers:
         if peak >= tier["min_unrealized_profit_pct_of_equity"]:
             if giveback_pct > tier["max_giveback_pct"]:
-                total_addons = sum(l.shares for l in state.addon_lots)
-                shares_to_sell = total_addons
-                if shares_to_sell <= 0 and state.base_lot is not None:
-                    shares_to_sell = state.base_lot.shares // 2
-                if shares_to_sell <= 0:
+                total_addons = sum(l.qty for l in state.addon_lots)
+                qty_to_sell = total_addons
+                if qty_to_sell <= 0 and state.base_lot is not None:
+                    qty_to_sell = state.base_lot.qty * 0.5
+                if qty_to_sell <= EPSILON:
                     return None
                 return Decision(
                     action=ActionType.SELL_TAKE_PROFIT,
-                    shares=shares_to_sell,
+                    qty=qty_to_sell,
                     reason="profit_giveback_tp",
                     indicators=indicators,
                 )
@@ -222,7 +232,7 @@ def check_trailing_tp(
     config: BotConfig,
 ) -> Optional[Decision]:
     """Section 14.5."""
-    if state.current_position_shares <= 0:
+    if state.current_position_qty <= EPSILON:
         return None
     ttp = config.take_profit.get("trailing_take_profit", {})
     if not ttp.get("enabled", False):
@@ -240,27 +250,27 @@ def check_trailing_tp(
         if profit >= tier["min_profit_pct_from_avg_entry"]:
             if dd >= tier["trailing_pct"]:
                 action = tier["action"]
-                total_addons = sum(l.shares for l in state.addon_lots)
+                total_addons = sum(l.qty for l in state.addon_lots)
                 if action == "reduce_addons_50pct":
-                    shares_to_sell = math.floor(total_addons * 0.50)
+                    qty_to_sell = total_addons * 0.50
                 elif action == "reduce_all_addons":
-                    shares_to_sell = total_addons
+                    qty_to_sell = total_addons
                 elif action == "reduce_to_core":
                     base_target = (
-                        math.floor(state.base_lot.shares * 0.25)
+                        state.base_lot.qty * 0.25
                         if state.base_lot is not None else 0
                     )
                     base_reduce_amt = (
-                        state.base_lot.shares - base_target if state.base_lot is not None else 0
+                        state.base_lot.qty - base_target if state.base_lot is not None else 0
                     )
-                    shares_to_sell = total_addons + max(0, base_reduce_amt)
+                    qty_to_sell = total_addons + max(0, base_reduce_amt)
                 else:
-                    shares_to_sell = 0
-                if shares_to_sell <= 0:
+                    qty_to_sell = 0
+                if qty_to_sell <= EPSILON:
                     return None
                 return Decision(
                     action=ActionType.SELL_TAKE_PROFIT,
-                    shares=shares_to_sell,
+                    qty=qty_to_sell,
                     reason=f"trailing_tp_{action}",
                     indicators=indicators,
                 )

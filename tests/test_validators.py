@@ -37,10 +37,10 @@ def _clean_state(**overrides):
     return make_state(state=BotState.FLAT, **overrides)
 
 
-def _buy_decision(shares: int = 10) -> Decision:
+def _buy_decision(qty: int = 10) -> Decision:
     return Decision(
         action=ActionType.BUY_STARTER,
-        shares=shares,
+        qty=qty,
         reason="test",
     )
 
@@ -85,16 +85,16 @@ def test_negative_adj_close_triggers_halt():
 
 def test_state_consistency_mismatch_triggers_halt():
     """
-    current_position_shares != base_lot.shares + sum(addon_lots) must HALT.
+    current_position_qty != base_lot.qty + sum(addon_lots) must HALT.
     """
     cfg = base_config()
     ind = _clean_indicators()
-    # base_lot = None → expected = 0; but current_position_shares = 10 → mismatch
+    # base_lot = None → expected = 0; but current_position_qty = 10 → mismatch
     state = make_state(
         state=BotState.BASE_LONG,
         base_lot=None,
         addon_lots=[],
-        current_position_shares=10,   # wrong — no lots but claims 10 shares
+        current_position_qty=10,   # wrong — no lots but claims 10 qty
     )
     issues = validate_data(ind, state, cfg)
     assert has_halt(issues), "Expected HALT for consistency mismatch."
@@ -104,7 +104,7 @@ def test_state_consistency_mismatch_triggers_halt():
 
 def test_flat_state_with_no_position_is_valid():
     """
-    FLAT state with base_lot=None, addon_lots=[], current_position_shares=0
+    FLAT state with base_lot=None, addon_lots=[], current_position_qty=0
     must NOT produce any HALT issue.  (Confirms zero-position consistency check.)
     """
     cfg = base_config()
@@ -113,7 +113,7 @@ def test_flat_state_with_no_position_is_valid():
         state=BotState.FLAT,
         base_lot=None,
         addon_lots=[],
-        current_position_shares=0,
+        current_position_qty=0,
     )
     issues = validate_data(ind, state, cfg)
     halt_issues = [i for i in issues if i.severity == HALT]
@@ -129,7 +129,7 @@ def test_low_volume_returns_warn_not_halt():
     """
     cfg = base_config()
     # min_avg_daily_dollar_volume = 100_000_000
-    # avg_volume_20d = 500_000 shares * adj_close=100 = $50M < $100M → WARN
+    # avg_volume_20d = 500_000 qty * adj_close=100 = $50M < $100M → WARN
     ind = _clean_indicators(avg_volume_20d=500_000.0, adj_close=100.0)
     state = _clean_state()
     issues = validate_data(ind, state, cfg)
@@ -176,12 +176,12 @@ def test_risk_manager_blocks_when_exited():
 
 def test_risk_manager_blocks_when_daily_loss_limit_hit():
     """
-    realized_pnl / starting_equity <= -max_daily_loss_pct_of_equity (3%)
+    daily_pnl / starting_equity <= -max_daily_loss_pct_of_equity (3%)
     → check_order_allowed returns (False, ...).
     """
     cfg = base_config()
     # starting = 100_000, max_daily_loss = 0.03 → threshold = -$3_000
-    state = make_state(realized_pnl=-3_100.0)   # exceeds 3%
+    state = make_state(daily_pnl=-3_100.0)   # exceeds 3%
     decision = _buy_decision()
     ind = _clean_indicators()
     allowed, reason = check_order_allowed(state, decision, cfg, ind)
@@ -195,15 +195,15 @@ def test_risk_manager_blocks_when_exposure_would_exceed_max():
     must be blocked.
     """
     cfg = base_config()
-    # current: 900 shares × $100 = $90_000 = 90% of 100_000
+    # current: 900 qty × $100 = $90_000 = 90% of 100_000
     # buy 200 more × $100 = $20_000 → 110% > 100% → block
     state = make_state(
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 100.0, 900),
-        current_position_shares=900,
+        current_position_qty=900,
         avg_entry_price=100.0,
     )
-    decision = Decision(action=ActionType.BUY_ADDON, shares=200, reason="test")
+    decision = Decision(action=ActionType.BUY_ADDON, qty=200, reason="test")
     ind = _clean_indicators(adj_close=100.0)
     allowed, reason = check_order_allowed(state, decision, cfg, ind)
     assert allowed is False
@@ -216,11 +216,11 @@ def test_risk_manager_allows_valid_order():
     state = make_state(
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 100.0, 10),
-        current_position_shares=10,
+        current_position_qty=10,
         avg_entry_price=100.0,
     )
-    # 10 current + 5 proposed = 15 shares × $100 = $1_500 / $100_000 = 1.5% ≪ 100%
-    decision = Decision(action=ActionType.BUY_ADDON, shares=5, reason="test")
+    # 10 current + 5 proposed = 15 qty × $100 = $1_500 / $100_000 = 1.5% ≪ 100%
+    decision = Decision(action=ActionType.BUY_ADDON, qty=5, reason="test")
     ind = _clean_indicators(adj_close=100.0)
     allowed, reason = check_order_allowed(state, decision, cfg, ind)
     assert allowed is True

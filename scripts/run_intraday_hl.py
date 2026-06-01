@@ -52,7 +52,7 @@ def main(config_path: str = "config/btc_long_thesis.yaml") -> None:
         sys.exit(1)
 
     try:
-        get_private_key()
+        get_private_key(config)
     except ValueError as exc:
         _log.critical("Startup failed: %s", exc)
         sys.exit(1)

@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from scripts.run_live_hl import (
+    CONTINUE,
     next_4h_candle_close,
     run_intraday_monitor,
     startup_checks,
@@ -30,14 +31,16 @@ from src.hl.ws_feed import HLWebSocketFeed
 
 HL_CONFIG_PATH = "config/btc_long_thesis.yaml"
 FAKE_KEY = "0x" + "a" * 64
+TESTNET_WALLET = "0x1111111111111111111111111111111111111111"
 
 
 # ── Named tests ───────────────────────────────────────────────────────────────
 
 def test_startup_requires_private_key():
-    """startup_checks raises SystemExit when HL_PRIVATE_KEY is not set."""
-    config = load_config(HL_CONFIG_PATH)
-    env = {k: v for k, v in os.environ.items() if k != "HL_PRIVATE_KEY"}
+    """startup_checks raises SystemExit when the testnet key env is not set."""
+    with patch.dict(os.environ, {"HL_TESTNET_ACCOUNT_ADDRESS": TESTNET_WALLET}, clear=False):
+        config = load_config(HL_CONFIG_PATH)
+    env = {k: v for k, v in os.environ.items() if k != "HL_TESTNET_AGENT_PRIVATE_KEY"}
     with patch.dict(os.environ, env, clear=True):
         with pytest.raises(SystemExit):
             startup_checks(config)
@@ -45,9 +48,13 @@ def test_startup_requires_private_key():
 
 def test_startup_requires_hl_config():
     """startup_checks raises SystemExit when the 'hl' config block is absent."""
-    config = load_config(HL_CONFIG_PATH)
+    with patch.dict(os.environ, {"HL_TESTNET_ACCOUNT_ADDRESS": TESTNET_WALLET}, clear=False):
+        config = load_config(HL_CONFIG_PATH)
     config.hl = None  # type: ignore[assignment]
-    with patch.dict(os.environ, {"HL_PRIVATE_KEY": FAKE_KEY}):
+    with patch.dict(os.environ, {
+        "HL_TESTNET_AGENT_PRIVATE_KEY": FAKE_KEY,
+        "HL_TESTNET_ACCOUNT_ADDRESS": TESTNET_WALLET,
+    }):
         with pytest.raises(SystemExit):
             startup_checks(config)
 
@@ -58,7 +65,8 @@ def test_startup_rejects_mainnet_without_env_var():
     during load_config (config_loader validation), not in startup_checks.
     """
     from src.core.config_loader import validate_config
-    config = load_config(HL_CONFIG_PATH)
+    with patch.dict(os.environ, {"HL_TESTNET_ACCOUNT_ADDRESS": TESTNET_WALLET}, clear=False):
+        config = load_config(HL_CONFIG_PATH)
     config.hl["network"] = "mainnet"  # type: ignore[index]
     env = {k: v for k, v in os.environ.items() if k != "HL_ALLOW_MAINNET"}
     with patch.dict(os.environ, env, clear=True):
@@ -123,7 +131,53 @@ def test_next_4h_candle_close_boundary_values():
 
 def test_startup_checks_returns_key_when_valid():
     """startup_checks returns the private key string on success."""
-    config = load_config(HL_CONFIG_PATH)
-    with patch.dict(os.environ, {"HL_PRIVATE_KEY": FAKE_KEY}):
+    with patch.dict(os.environ, {"HL_TESTNET_ACCOUNT_ADDRESS": TESTNET_WALLET}, clear=False):
+        config = load_config(HL_CONFIG_PATH)
+    with patch.dict(os.environ, {
+        "HL_TESTNET_AGENT_PRIVATE_KEY": FAKE_KEY,
+        "HL_TESTNET_ACCOUNT_ADDRESS": TESTNET_WALLET,
+    }):
         key = startup_checks(config)
     assert key == FAKE_KEY
+
+
+def test_one_cycle_main_exits_without_starting_recurring_loop(monkeypatch, tmp_path):
+    from scripts import run_live_hl as live_script
+
+    cfg = load_config("config/mu_long_thesis.yaml")
+    cfg.bot["mode"] = "testnet"
+    cfg.data["source"] = "hyperliquid"
+    cfg.logging["run_dir"] = str(tmp_path / "run")
+    cfg.hl = {
+        "network": "testnet",
+        "coin": "BTC",
+        "wallet_address": TESTNET_WALLET,
+        "bar_interval": "4h",
+        "sz_decimals": 5,
+    }
+
+    monkeypatch.setattr(live_script, "load_config", lambda _: cfg)
+    monkeypatch.setattr(live_script, "startup_checks", lambda config: FAKE_KEY)
+    monkeypatch.setattr(live_script, "HyperliquidClient", lambda network: object())
+    monkeypatch.setattr(
+        live_script,
+        "load_state_or_halt",
+        lambda *args, **kwargs: (live_script.ThesisState(symbol="BTC"), False),
+    )
+    cycle = {"count": 0}
+
+    def fake_cycle(*args, **kwargs):
+        cycle["count"] += 1
+        return CONTINUE
+
+    feed_cls = MagicMock()
+    monkeypatch.setattr(live_script, "run_decision_cycle", fake_cycle)
+    monkeypatch.setattr(live_script, "HLWebSocketFeed", feed_cls)
+    live_script._STOP_EVENT.clear()
+
+    live_script.main("unused.yaml", dry_run=False, one_cycle=True)
+
+    assert cycle["count"] == 1
+    feed_cls.assert_not_called()
+    assert live_script._STOP_EVENT.is_set()
+    live_script._STOP_EVENT.clear()

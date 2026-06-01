@@ -6,7 +6,7 @@ from typing import Optional
 import numpy as np
 
 from src.core.models import (
-    ActionType, BotConfig, BotState, Decision, IndicatorSnapshot, ThesisState,
+    EPSILON, ActionType, BotConfig, BotState, Decision, IndicatorSnapshot, ThesisState,
 )
 
 
@@ -69,7 +69,7 @@ def update_event_risk_mode(
     if state.state == BotState.EVENT_RISK_MODE and days_to_event < -cooldown:
         if state.prior_state is not None:
             state.state = state.prior_state
-        elif state.current_position_shares > 0:
+        elif state.current_position_qty > EPSILON:
             state.state = BotState.BASE_LONG
         else:
             state.state = BotState.FLAT
@@ -90,7 +90,7 @@ def check_event_derisking(
     """
     if not config.event_risk.get("enabled", False):
         return None
-    if state.current_position_shares <= 0:
+    if state.current_position_qty <= EPSILON:
         return None
     event_date = event_date_from_config(config)
     if event_date is None:
@@ -103,7 +103,7 @@ def check_event_derisking(
         return None
 
     starting = config.capital["starting_equity"]
-    current_exposure_pct = (state.current_position_shares * indicators.adj_close) / starting
+    current_exposure_pct = (state.current_position_qty * indicators.adj_close) / starting
 
     # T-1 force flat
     force_flat = config.event_risk.get("force_flat_before_event", False)
@@ -111,7 +111,7 @@ def check_event_derisking(
     if force_flat and 0 <= days_to_event <= force_flat_t:
         return Decision(
             action=ActionType.SELL_EVENT_DERISKING,
-            shares=state.current_position_shares,
+            qty=state.current_position_qty,
             reason=f"event_force_flat_T-{days_to_event}",
             new_state=BotState.EXITED,
             indicators=indicators,
@@ -122,12 +122,12 @@ def check_event_derisking(
     core_pct = config.event_risk.get("core_exposure_before_event_pct", 0.20)
     if 0 < days_to_event <= t2 and current_exposure_pct > core_pct:
         target_notional = core_pct * starting
-        target_shares = int(target_notional // indicators.adj_close)
-        shares_to_sell = state.current_position_shares - target_shares
-        if shares_to_sell > 0:
+        target_qty = target_notional / indicators.adj_close
+        qty_to_sell = state.current_position_qty - target_qty
+        if qty_to_sell > EPSILON:
             return Decision(
                 action=ActionType.SELL_EVENT_DERISKING,
-                shares=shares_to_sell,
+                qty=qty_to_sell,
                 reason=f"event_t{days_to_event}_reduce_to_core_{int(core_pct*100)}pct",
                 indicators=indicators,
             )
@@ -137,12 +137,12 @@ def check_event_derisking(
     max_pct = config.event_risk.get("max_exposure_before_event_pct", 0.50)
     if 0 < days_to_event <= t5 and current_exposure_pct > max_pct:
         target_notional = max_pct * starting
-        target_shares = int(target_notional // indicators.adj_close)
-        shares_to_sell = state.current_position_shares - target_shares
-        if shares_to_sell > 0:
+        target_qty = target_notional / indicators.adj_close
+        qty_to_sell = state.current_position_qty - target_qty
+        if qty_to_sell > EPSILON:
             return Decision(
                 action=ActionType.SELL_EVENT_DERISKING,
-                shares=shares_to_sell,
+                qty=qty_to_sell,
                 reason=f"event_t{days_to_event}_reduce_to_{int(max_pct*100)}pct",
                 indicators=indicators,
             )

@@ -223,7 +223,6 @@ execution:
   retry_count: 2
   retry_delay_seconds: 5
   partial_fill_policy: accept_partial_then_reprice
-  round_lot_size: 1
 
 data:
   source: yfinance               # v0.1 only valid value

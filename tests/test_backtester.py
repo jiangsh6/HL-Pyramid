@@ -138,7 +138,7 @@ def test_trailing_stop_updated_before_decision():
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 90.0, 10),
         avg_entry_price=90.0,
-        current_position_shares=10,
+        current_position_qty=10,
         highest_price_since_entry=100.0,
         trailing_stop_price=88.0,
         initial_stop_price=40.0,
@@ -250,7 +250,7 @@ def test_gap_down_fill_at_next_bar_open_not_stop_price():
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 90.0, 10),
         avg_entry_price=90.0,
-        current_position_shares=10,
+        current_position_qty=10,
         highest_price_since_entry=90.0,   # start with high=90 so stop ~ 90*0.88=79.2 < 80
         trailing_stop_price=79.0,         # below adj_close=80 → won't fire on prior bars
         initial_stop_price=40.0,
@@ -336,10 +336,10 @@ def test_metrics_count_trade_actions_correctly():
             bar_date=date(2025, 1, 2),
             adj_close=100.0,
             open_price=99.0,
-            shares=10,
+            qty=10,
             avg_entry_price=90.0,
             fill_price=100.0,
-            fill_shares=(-10 if action in (
+            fill_qty=(-10 if action in (
                 ActionType.SELL_TAKE_PROFIT, ActionType.SELL_STOP,
                 ActionType.SELL_TRAILING_STOP, ActionType.EXIT_ALL,
                 ActionType.SELL_REDUCE_ADDON, ActionType.SELL_REDUCE_BASE,

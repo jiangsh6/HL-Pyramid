@@ -1,4 +1,6 @@
 """Section 22.7 — Take profit tests."""
+import math
+
 from src.core.models import ActionType, BotState
 from src.strategy.take_profit import (
     check_exposure_tp, check_giveback_tp, check_layered_tp,
@@ -12,7 +14,8 @@ def _base_state(**overrides):
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 700.0, 30),
         avg_entry_price=700.0,
-        current_position_shares=30,
+        current_position_qty=30,
+        original_base_qty=30,
         highest_price_since_entry=1000.0,
     )
     for k, v in overrides.items():
@@ -29,7 +32,7 @@ def test_layered_tp_triggers_at_correct_profit_level():
     assert d is not None
     assert d.action == ActionType.SELL_TAKE_PROFIT
     assert d.reason == "layered_tp_level_1"
-    assert d.shares == 3   # floor(0.10 * 30)
+    assert d.qty == 3   # 
 
 
 def test_layered_tp_triggers_only_once_per_level():
@@ -73,14 +76,13 @@ def test_layered_tp_reduces_addons_first_lifo():
             make_lot("add_2", 800.0, 6),
         ],
         avg_entry_price=727.0,
-        current_position_shares=34,
+        current_position_qty=34,
         highest_price_since_entry=950.0,
     )
     ind = make_indicators(adj_close=950.0)   # ~30% from 727
     d = check_layered_tp(state, ind, cfg)
     assert d is not None
-    # Decision says how many to sell; caller does LIFO.  shares = floor(0.10*34)=3
-    assert d.shares == 3
+    assert math.isclose(d.qty, 3.4)
 
 
 def test_trailing_stop_raised_after_layered_tp():
@@ -126,31 +128,56 @@ def test_target_price_tp_uses_target_price_tp_triggered_field():
 
 def test_target_price_tp_enters_runner_mode():
     cfg = base_config()
-    state = _base_state()   # base_lot.shares=30
+    state = _base_state()   # base_lot.qty=30
     ind = make_indicators(adj_close=2000.0)
     d = check_target_tp(state, ind, cfg)
     assert d is not None
-    # runner_target_shares = floor(30 * 0.25) = 7
-    assert state.runner_target_shares == 7
+    assert state.runner_target_qty == 7.5
     assert state.runner_mode_active is True
     # Tight trailing stop set to adj_close * (1 - 0.08) = 1840
     assert abs(state.trailing_stop_price - 1840.0) < 1e-6
 
 
+def test_runner_mode_uses_original_base_qty_after_base_reduction():
+    cfg = base_config()
+    state = _base_state(
+        base_lot=make_lot("base", 700.0, 0.5),
+        current_position_qty=0.5,
+        original_base_qty=1.0,
+    )
+    ind = make_indicators(adj_close=2000.0)
+    d = check_target_tp(state, ind, cfg)
+    assert d is not None
+    assert d.action == ActionType.SELL_TAKE_PROFIT
+    assert state.runner_target_qty == 0.25
+    assert d.qty == 0.25
+
+
+def test_runner_mode_halts_when_original_base_qty_missing():
+    cfg = base_config()
+    state = _base_state(original_base_qty=0.0)
+    ind = make_indicators(adj_close=2000.0)
+    d = check_target_tp(state, ind, cfg)
+    assert d is not None
+    assert d.action == ActionType.HALT
+    assert state.halted is True
+    assert state.halt_reason == "original_base_qty_missing_for_runner"
+
+
 def test_exposure_tp_triggers_at_hard_cap():
     cfg = base_config()
-    # hard_cap=1.00 → 100k notional on 100k equity → 1000 shares at $100
+    # hard_cap=1.00 → 100k notional on 100k equity → 1000 qty at $100
     state = make_state(
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 80.0, 1000),
         avg_entry_price=80.0,
-        current_position_shares=1000,
+        current_position_qty=1000,
     )
     ind = make_indicators(adj_close=100.0)
     d = check_exposure_tp(state, ind, cfg)
     assert d is not None
-    # reduce to 70% → 700 shares → sell 300
-    assert d.shares == 300
+    # reduce to 70% → 700 qty → sell 300
+    assert d.qty == 300
 
 
 def test_exposure_tp_soft_cap_blocks_add_only():
@@ -160,7 +187,7 @@ def test_exposure_tp_soft_cap_blocks_add_only():
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 80.0, 850),
         avg_entry_price=80.0,
-        current_position_shares=850,
+        current_position_qty=850,
     )
     ind = make_indicators(adj_close=100.0)   # 85k notional → 85% exposure
     d = check_exposure_tp(state, ind, cfg)
@@ -170,7 +197,7 @@ def test_exposure_tp_soft_cap_blocks_add_only():
 def test_profit_giveback_tp_triggers_when_giveback_exceeds_threshold():
     cfg = base_config()
     state = _base_state(addon_lots=[make_lot("add_1", 800.0, 5)])
-    state.current_position_shares = 35
+    state.current_position_qty = 35
     state.avg_entry_price = (30 * 700 + 5 * 800) / 35
     # Set peak 25% of equity ($25k unrealized) — current 4% giveback well above 25% threshold
     state.peak_unrealized_pnl_pct = 0.25
@@ -188,7 +215,7 @@ def test_trailing_tp_fires_at_correct_profit_and_drawdown_tier():
     state = _base_state(
         addon_lots=[make_lot("add_1", 800.0, 10)],
         avg_entry_price=725.0,
-        current_position_shares=40,
+        current_position_qty=40,
         highest_price_since_entry=1050.0,
     )
     # profit_from_avg: at close 900, (900-725)/725 = 24% → first tier (20%)
@@ -197,17 +224,17 @@ def test_trailing_tp_fires_at_correct_profit_and_drawdown_tier():
     d = check_trailing_tp(state, ind, cfg)
     assert d is not None
     assert d.reason == "trailing_tp_reduce_addons_50pct"
-    assert d.shares == 5   # floor(10 * 0.50)
+    assert d.qty == 5   # 
 
 
 def test_runner_mode_uses_separate_tight_trailing_stop():
     cfg = base_config()
     state = _base_state(state=BotState.RUNNER_LONG,
                         runner_mode_active=True,
-                        runner_target_shares=7,
+                        runner_target_qty=7,
                         trailing_stop_price=1840.0)
     state.base_lot = make_lot("base", 700.0, 7)
-    state.current_position_shares = 7
+    state.current_position_qty = 7
     # adj_close=1840 ⇒ trailing trips; close ≤ stop
     from src.strategy.stops import check_stop_triggers
     ind = make_indicators(adj_close=1840.0, high=1850.0, ma5=1800, ma10=1750,

@@ -223,7 +223,6 @@ execution:
   retry_count: 2
   retry_delay_seconds: 3
   partial_fill_policy: accept_partial_then_reprice
-  round_lot_size: 1
 
 data:
   source: hyperliquid
@@ -262,7 +261,9 @@ hl:
   network: mainnet
   coin: BTC
   bar_interval: 4h
-  wallet_address: "0x0000000000000000000000000000000000000000"
-  key_env_var: HL_PRIVATE_KEY
+  wallet_address: "ENV"              # Resolves from HL_MAINNET_ACCOUNT_ADDRESS
+  wallet_env_var: HL_MAINNET_ACCOUNT_ADDRESS
+  key_env_var: HL_MAINNET_AGENT_PRIVATE_KEY
+  collateral_mode: unified           # Spot USDC is valid unified trading collateral
   sz_decimals: 3
   min_size: 0.001

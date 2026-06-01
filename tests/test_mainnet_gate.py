@@ -15,6 +15,8 @@ from src.hl.auth import validate_mainnet_intent
 
 TESTNET_CONFIG_PATH = "config/btc_long_thesis.yaml"
 MAINNET_CONFIG_PATH = "config/btc_long_thesis_mainnet.yaml"
+TESTNET_WALLET = "0x2222222222222222222222222222222222222222"
+MAINNET_WALLET = "0x1111111111111111111111111111111111111111"
 
 
 def _clone(cfg: BotConfig) -> BotConfig:
@@ -22,7 +24,10 @@ def _clone(cfg: BotConfig) -> BotConfig:
 
 
 def _mainnet_config() -> BotConfig:
-    with patch.dict(os.environ, {"HL_ALLOW_MAINNET": "true"}):
+    with patch.dict(os.environ, {
+        "HL_ALLOW_MAINNET": "true",
+        "HL_MAINNET_ACCOUNT_ADDRESS": MAINNET_WALLET,
+    }):
         return load_config(MAINNET_CONFIG_PATH)
 
 
@@ -43,7 +48,11 @@ def test_mainnet_rejected_without_mainnet_confirmed_field():
 
 
 def test_mainnet_rejected_without_cli_flag():
-    with patch.dict(os.environ, {"HL_ALLOW_MAINNET": "true", "HL_PRIVATE_KEY": "0x" + "a" * 64}):
+    with patch.dict(os.environ, {
+        "HL_ALLOW_MAINNET": "true",
+        "HL_MAINNET_AGENT_PRIVATE_KEY": "0x" + "a" * 64,
+        "HL_MAINNET_ACCOUNT_ADDRESS": MAINNET_WALLET,
+    }):
         with pytest.raises(SystemExit, match="--mainnet flag was not passed"):
             run_live_main(MAINNET_CONFIG_PATH, mainnet=False)
 
@@ -56,6 +65,7 @@ def test_mainnet_accepted_when_all_four_layers_present():
 
 def test_testnet_unaffected_by_mainnet_gate():
     env = {k: v for k, v in os.environ.items() if k != "HL_ALLOW_MAINNET"}
+    env["HL_TESTNET_ACCOUNT_ADDRESS"] = TESTNET_WALLET
     with patch.dict(os.environ, env, clear=True):
         cfg = load_config(TESTNET_CONFIG_PATH)
     assert cfg.bot["mode"] == "testnet"

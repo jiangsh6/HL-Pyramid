@@ -25,17 +25,17 @@ FAKE_KEY = "0x" + "a" * 64
 
 def test_get_private_key_returns_value_from_env():
     """get_private_key() returns the env var value when it is set."""
-    with patch.dict(os.environ, {"HL_PRIVATE_KEY": FAKE_KEY}):
-        key = get_private_key()
+    with patch.dict(os.environ, {"HL_TESTNET_AGENT_PRIVATE_KEY": FAKE_KEY}):
+        key = get_private_key(network="testnet")
     assert key == FAKE_KEY
 
 
 def test_get_private_key_raises_when_env_not_set():
-    """get_private_key() raises ValueError when HL_PRIVATE_KEY is not set."""
-    env = {k: v for k, v in os.environ.items() if k != "HL_PRIVATE_KEY"}
+    """get_private_key() raises ValueError when the network key env is not set."""
+    env = {k: v for k, v in os.environ.items() if k != "HL_TESTNET_AGENT_PRIVATE_KEY"}
     with patch.dict(os.environ, env, clear=True):
-        with pytest.raises(ValueError, match="HL_PRIVATE_KEY env var not set"):
-            get_private_key()
+        with pytest.raises(ValueError, match="HL_TESTNET_AGENT_PRIVATE_KEY env var not set"):
+            get_private_key(network="testnet")
 
 
 def test_private_key_never_appears_in_error_message():
@@ -87,10 +87,10 @@ def test_build_signer_returns_account_object():
 # ── Extra coverage ────────────────────────────────────────────────────────────
 
 def test_get_private_key_raises_for_empty_string():
-    """An empty HL_PRIVATE_KEY is treated as unset and raises ValueError."""
-    with patch.dict(os.environ, {"HL_PRIVATE_KEY": ""}):
-        with pytest.raises(ValueError, match="HL_PRIVATE_KEY"):
-            get_private_key()
+    """An empty testnet key env is treated as unset and raises ValueError."""
+    with patch.dict(os.environ, {"HL_TESTNET_AGENT_PRIVATE_KEY": ""}):
+        with pytest.raises(ValueError, match="HL_TESTNET_AGENT_PRIVATE_KEY"):
+            get_private_key(network="testnet")
 
 
 def test_build_signer_produces_deterministic_address():

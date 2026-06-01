@@ -2,27 +2,52 @@
 Private key management — Phase 4.
 
 SECURITY INVARIANTS (must never be violated):
-  - HL_PRIVATE_KEY is NEVER logged
-  - HL_PRIVATE_KEY is NEVER included in any exception message or traceback
-  - HL_PRIVATE_KEY is NEVER written to any file
+  - Agent private keys are NEVER logged
+  - Agent private keys are NEVER included in any exception message or traceback
+  - Agent private keys are NEVER written to any file
 """
 from __future__ import annotations
 
 import os
 
+from src.core.env_loader import ensure_runtime_env_loaded
 from src.core.models import BotConfig
 
+DEFAULT_PRIVATE_KEY_ENV = {
+    "testnet": "HL_TESTNET_AGENT_PRIVATE_KEY",
+    "mainnet": "HL_MAINNET_AGENT_PRIVATE_KEY",
+}
 
-def get_private_key() -> str:
+
+def _resolve_key_env_name(
+    config: BotConfig | None = None,
+    network: str | None = None,
+) -> str:
+    if network is None and config is not None:
+        network = (config.hl or {}).get("network")
+    env_name = None
+    if config is not None:
+        env_name = (config.hl or {}).get("key_env_var")
+    if env_name:
+        return str(env_name)
+    return DEFAULT_PRIVATE_KEY_ENV.get(network or "testnet", DEFAULT_PRIVATE_KEY_ENV["testnet"])
+
+
+def get_private_key(
+    config: BotConfig | None = None,
+    network: str | None = None,
+) -> str:
     """
-    Load the private key from the HL_PRIVATE_KEY environment variable.
+    Load the signing key from the configured or network-specific env variable.
 
     Raises ValueError if the env var is not set.
     The error message deliberately contains no key material.
     """
-    key = os.environ.get("HL_PRIVATE_KEY")
+    ensure_runtime_env_loaded()
+    env_name = _resolve_key_env_name(config=config, network=network)
+    key = os.environ.get(env_name)
     if not key:
-        raise ValueError("HL_PRIVATE_KEY env var not set — cannot sign orders")
+        raise ValueError(f"{env_name} env var not set — cannot sign orders")
     return key
 
 

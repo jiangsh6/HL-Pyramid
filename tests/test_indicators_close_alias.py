@@ -123,7 +123,7 @@ def test_indicator_snapshot_close_field_always_populated():
 
 def test_make_indicators_helper_populates_close():
     """
-    The shared _helpers.make_indicators() factory (used by all Phase 1-5 tests)
+    The common _helpers.make_indicators() factory (used by all Phase 1-5 tests)
     does not pass close= explicitly. The model_validator must auto-populate it.
     """
     snap = make_indicators(adj_close=123.45)

@@ -30,14 +30,14 @@ def test_hard_stop_exits_all_and_sets_exited():
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 900.0, 30),
         avg_entry_price=900.0,
-        current_position_shares=30,
+        current_position_qty=30,
         initial_stop_price=800.0,
     )
     ind = make_indicators(adj_close=790.0, ma5=850, ma10=850, ma20=850, ma50=850)
     d = run(state, ind, cfg)
     assert d.action == ActionType.SELL_STOP
     assert d.new_state == BotState.EXITED
-    assert d.shares == 30
+    assert d.qty == 30
 
 
 def test_trailing_stop_updated_from_daily_high_before_trigger_check():
@@ -47,7 +47,7 @@ def test_trailing_stop_updated_from_daily_high_before_trigger_check():
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 800.0, 10),
         avg_entry_price=800.0,
-        current_position_shares=10,
+        current_position_qty=10,
         highest_price_since_entry=1000.0,
         trailing_stop_price=900.0,
     )
@@ -69,7 +69,7 @@ def test_trailing_stop_never_lowered():
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 800.0, 10),
         avg_entry_price=800.0,
-        current_position_shares=10,
+        current_position_qty=10,
         highest_price_since_entry=1200.0,
         trailing_stop_price=1100.0,   # existing high stop
     )
@@ -86,7 +86,7 @@ def test_trailing_stop_trigger_uses_adj_close_not_intraday():
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 800.0, 10),
         avg_entry_price=800.0,
-        current_position_shares=10,
+        current_position_qty=10,
         initial_stop_price=500.0,
         trailing_stop_price=900.0,
         highest_price_since_entry=950.0,
@@ -104,7 +104,7 @@ def test_trailing_stop_correct_when_bar_makes_new_high_then_closes_below():
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 800.0, 10),
         avg_entry_price=800.0,
-        current_position_shares=10,
+        current_position_qty=10,
         highest_price_since_entry=1000.0,
         trailing_stop_price=940.0,
     )
@@ -123,10 +123,10 @@ def test_max_thesis_loss_exits_and_halts_bot():
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 900.0, 10),
         avg_entry_price=900.0,
-        current_position_shares=10,
-        thesis_pnl=-7_000.0,   # > 6% of 100_000
+        current_position_qty=10,
+        thesis_pnl=0.0,   # stale value must be replaced by mark-to-market loss
     )
-    ind = make_indicators(adj_close=800.0, ma5=850, ma10=850, ma20=850, ma50=850)
+    ind = make_indicators(adj_close=200.0, ma5=250, ma10=250, ma20=250, ma50=250)
     d = run(state, ind, cfg)
     assert d.action == ActionType.EXIT_ALL
     assert d.new_state == BotState.HALTED
@@ -136,8 +136,8 @@ def test_max_thesis_loss_exits_and_halts_bot():
 
 def test_max_daily_loss_blocks_orders_only():
     cfg = base_config()
-    # FLAT state, no position. Hit daily loss threshold via realized_pnl.
-    state = make_state(realized_pnl=-3_500.0)   # > 3% of 100_000
+    # FLAT state, no position. Hit daily loss threshold via daily_pnl.
+    state = make_state(realized_pnl=10_000.0, daily_pnl=-3_500.0)   # > 3% of 100_000
     ind = make_indicators(adj_close=100.0, ma5=99, ma10=98, ma20=95, ma50=90,
                           volume=2_000_000, avg_volume_20d=1_500_000)
     d = run(state, ind, cfg)
@@ -152,9 +152,9 @@ def test_intraday_drawdown_halts_bot():
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 1000.0, 100),
         avg_entry_price=1000.0,
-        current_position_shares=100,
+        current_position_qty=100,
     )
     # max_intraday_drawdown_pct_of_equity = 0.04 → $4000 budget on 100k.
-    # 100 shares * (current - 1000) ≤ -4000 → current ≤ 960
+    # 100 qty * (current - 1000) ≤ -4000 → current ≤ 960
     assert check_intraday_drawdown(state, current_price=950.0, config=cfg) is True
     assert check_intraday_drawdown(state, current_price=970.0, config=cfg) is False

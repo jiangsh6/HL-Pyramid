@@ -11,10 +11,10 @@ def _add_ready_state(**overrides):
     """Build a state that satisfies most add conditions."""
     state = make_state(
         state=BotState.BASE_LONG,
-        base_lot=make_lot("base", entry_price=900.0, shares=10,
+        base_lot=make_lot("base", entry_price=900.0, qty=10,
                           entry_date_str="2026-05-20"),
         avg_entry_price=900.0,
-        current_position_shares=10,
+        current_position_qty=10,
         entry_date=date(2026, 5, 20),
         last_add_price=900.0,
         add_count=0,
@@ -145,7 +145,11 @@ def test_add_blocked_when_remaining_risk_budget_exhausted():
 def test_add_blocked_when_tp_fired_same_cycle():
     """Section 8.1 priority — TP fires Step 10, blocks add at Step 12."""
     cfg = base_config()
-    state = _add_ready_state(avg_entry_price=700.0)
+    state = _add_ready_state(
+        base_lot=make_lot("base", entry_price=700.0, qty=10,
+                          entry_date_str="2026-05-20"),
+        avg_entry_price=700.0,
+    )
     # Profit = (950-700)/700 = 35.7% — triggers layered TP level 1 (30%).
     ind = _ready_indicators(adj_close=950.0)
     d = run(state, ind, cfg)

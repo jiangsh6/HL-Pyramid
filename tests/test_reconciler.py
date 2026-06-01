@@ -13,6 +13,8 @@ All 7 named tests:
 from __future__ import annotations
 
 from datetime import date
+import os
+from unittest.mock import patch
 
 import pytest
 
@@ -24,12 +26,14 @@ from tests._helpers import make_state
 
 
 HL_CONFIG_PATH = "config/btc_long_thesis.yaml"
+TESTNET_WALLET = "0x1111111111111111111111111111111111111111"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _hl_config():
-    return load_config(HL_CONFIG_PATH)
+    with patch.dict(os.environ, {"HL_TESTNET_ACCOUNT_ADDRESS": TESTNET_WALLET}, clear=False):
+        return load_config(HL_CONFIG_PATH)
 
 
 def _make_snapshot(coin: str = "BTC", contracts: float = 0.0,
@@ -38,7 +42,7 @@ def _make_snapshot(coin: str = "BTC", contracts: float = 0.0,
     if contracts != 0.0:
         positions.append(HLPosition(
             coin=coin,
-            contracts=contracts,
+            qty=contracts,
             entry_price=50000.0,
             mark_price=50000.0,
             unrealized_pnl=0.0,
@@ -60,14 +64,14 @@ def _make_hl_state(contracts: float) -> ThesisState:
         lot = LotRecord(
             lot_id="base",
             entry_price=50000.0,
-            contracts=contracts,
+            qty=contracts,
             entry_date=date(2026, 1, 1),
         )
         return ThesisState(
             symbol="BTC",
             state=BotState.BASE_LONG,
             base_lot=lot,
-            current_position_contracts=contracts,
+            current_position_qty=contracts,
         )
     return ThesisState(symbol="BTC", state=BotState.FLAT)
 
@@ -83,7 +87,7 @@ def test_reconcile_ok_when_both_flat():
     result = reconcile(state, snapshot, config)
 
     assert result.status == "ok"
-    assert result.drift_contracts == 0.0
+    assert result.drift_qty == 0.0
 
 
 def test_reconcile_ok_when_positions_match():
@@ -108,7 +112,7 @@ def test_reconcile_warn_on_minor_drift_within_tolerance():
 
     assert result.status == "warn"
     assert result.reason == "minor_drift_within_tolerance"
-    assert result.drift_contracts == pytest.approx(0.0009, abs=1e-9)
+    assert result.drift_qty == pytest.approx(0.0009, abs=1e-9)
 
 
 def test_reconcile_halt_on_major_drift():
@@ -122,7 +126,7 @@ def test_reconcile_halt_on_major_drift():
 
     assert result.status == "halt"
     assert result.reason == "position_mismatch_exceeds_tolerance"
-    assert result.drift_contracts == pytest.approx(0.003, abs=1e-9)
+    assert result.drift_qty == pytest.approx(0.003, abs=1e-9)
 
 
 def test_reconcile_halt_on_liquidation_detected():
@@ -135,7 +139,7 @@ def test_reconcile_halt_on_liquidation_detected():
 
     assert result.status == "halt"
     assert result.reason == "liquidation_detected"
-    assert result.drift_contracts == pytest.approx(0.1)
+    assert result.drift_qty == pytest.approx(0.1)
 
 
 def test_update_state_from_hl_updates_liquidation_price():
@@ -143,7 +147,7 @@ def test_update_state_from_hl_updates_liquidation_price():
     state  = make_state(BotState.BASE_LONG)
     hl_pos = HLPosition(
         coin="BTC",
-        contracts=0.1,
+        qty=0.1,
         entry_price=50000.0,
         mark_price=51000.0,
         unrealized_pnl=100.0,
@@ -164,7 +168,7 @@ def test_update_state_from_hl_does_not_change_lot_structure():
     lot = LotRecord(
         lot_id="base",
         entry_price=50000.0,
-        contracts=0.1,
+        qty=0.1,
         entry_date=date(2026, 1, 1),
     )
     state = ThesisState(
@@ -172,11 +176,11 @@ def test_update_state_from_hl_does_not_change_lot_structure():
         state=BotState.BASE_LONG,
         base_lot=lot,
         addon_lots=[],
-        current_position_contracts=0.1,
+        current_position_qty=0.1,
     )
     hl_pos = HLPosition(
         coin="BTC",
-        contracts=0.2,        # different from state — reconciler only observes
+        qty=0.2,        # different from state — reconciler only observes
         entry_price=48000.0,
         mark_price=51000.0,
         unrealized_pnl=300.0,
@@ -187,10 +191,10 @@ def test_update_state_from_hl_does_not_change_lot_structure():
 
     updated = update_state_from_hl(state, hl_pos)
 
-    assert updated.base_lot.contracts  == 0.1
+    assert updated.base_lot.qty  == 0.1
     assert updated.base_lot.entry_price == 50000.0
     assert len(updated.addon_lots)     == 0
-    assert updated.current_position_contracts == 0.1
+    assert updated.current_position_qty == 0.1
     # But metadata is updated
     assert updated.liquidation_price == 43000.0
     assert updated.margin_used_usd   == 2000.0
@@ -217,7 +221,7 @@ def test_update_state_from_hl_handles_none_liquidation_price():
     state  = make_state(BotState.BASE_LONG)
     hl_pos = HLPosition(
         coin="BTC",
-        contracts=0.1,
+        qty=0.1,
         entry_price=50000.0,
         mark_price=50000.0,
         unrealized_pnl=0.0,

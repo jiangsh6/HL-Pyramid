@@ -7,6 +7,9 @@ from typing import List, Optional
 from pydantic import BaseModel, model_validator
 
 
+EPSILON = 1e-12
+
+
 # ── State Machine ────────────────────────────────────────────────────────────
 
 class BotState(str, Enum):
@@ -24,27 +27,19 @@ class BotState(str, Enum):
 # ── Core data models ─────────────────────────────────────────────────────────
 
 class LotRecord(BaseModel):
-    """One position lot (base or add-on).
-
-    ``contracts`` is the primary field (float, supports fractional crypto lots).
-    ``shares`` is kept as ``Optional[int]`` for backward compat with existing
-    tests and equity code; it is always auto-populated from ``contracts`` by
-    the model validator (truncated to int).
-    """
+    """One perpetual position lot (base or add-on)."""
+    model_config = {"extra": "forbid"}
     lot_id:      str
     entry_price: float
-    contracts:   float         = 0.0   # primary — float contract size
+    qty:         float         = 0.0
     entry_date:  date
-    shares:      Optional[int] = None  # compat; auto-synced ← do not use in new code
 
     @model_validator(mode="after")
-    def _sync_contracts_shares(self) -> "LotRecord":
-        # Old code path: shares= was set, contracts defaults to 0
-        if self.contracts == 0.0 and self.shares is not None:
-            self.contracts = float(self.shares)
-        # Always ensure shares is an int for backward compat
-        if self.shares is None:
-            self.shares = int(self.contracts)  # truncates; HL fractional lots get 0
+    def _validate_qty(self) -> "LotRecord":
+        if self.qty < -EPSILON:
+            raise ValueError("lot qty must be non-negative")
+        if abs(self.qty) <= EPSILON:
+            self.qty = 0.0
         return self
 
 
@@ -86,13 +81,13 @@ class IndicatorSnapshot(BaseModel):
 
 
 class ThesisState(BaseModel):
+    model_config = {"extra": "forbid"}
     symbol:               str
     state:                BotState           = BotState.FLAT
     prior_state:          Optional[BotState] = None
     protect_profit_mode:  bool               = False
     runner_mode_active:       bool               = False
-    runner_target_contracts:  Optional[float]   = None  # primary (new)
-    runner_target_shares:     Optional[int]     = None  # compat
+    runner_target_qty:        Optional[float]   = None
 
     thesis_enabled: bool          = True
     entry_date:     Optional[date] = None
@@ -101,9 +96,8 @@ class ThesisState(BaseModel):
     addon_lots: List[LotRecord]     = []
 
     avg_entry_price:              Optional[float] = None
-    # Position size — contracts is primary, shares is compat (always populated)
-    current_position_contracts:   float          = 0.0
-    current_position_shares:      Optional[int]  = None  # compat; auto-synced
+    current_position_qty:         float          = 0.0
+    original_base_qty:            float          = 0.0
     current_notional:             float          = 0.0
     # Per-asset contract metadata (set from hl.sz_decimals config or HLAssetMeta)
     sz_decimals:                  int            = 0
@@ -122,6 +116,10 @@ class ThesisState(BaseModel):
     realized_pnl:  float = 0.0
     unrealized_pnl: float = 0.0
     thesis_pnl:    float = 0.0
+    # daily_pnl resets at the start of each new calendar day in decision_engine.
+    # Used by the max_daily_loss check (Section 16.3) so historical realized
+    # PnL doesn't mask a fresh-day drawdown.
+    daily_pnl:     float = 0.0
     days_to_event: Optional[int] = None
     # HL Phase 1: funding PnL placeholder (computed in Phase 6)
     cumulative_funding_pnl: float = 0.0
@@ -131,6 +129,12 @@ class ThesisState(BaseModel):
     liquidation_price: Optional[float] = None
     margin_used_usd:   float = 0.0
     leverage_used:     float = 0.0
+    dust_position:     bool = False
+    dust_qty:          float = 0.0
+    dust_notional:     float = 0.0
+    dust_reason:       Optional[str] = None
+
+    pending_order: Optional["PendingOrder"] = None
 
     halted:       bool           = False
     halt_reason:  Optional[str]  = None
@@ -138,18 +142,66 @@ class ThesisState(BaseModel):
     last_updated: Optional[datetime] = None
 
     @model_validator(mode="after")
-    def _sync_position_fields(self) -> "ThesisState":
-        # current_position: old code sets shares= → derive contracts
-        if self.current_position_shares is not None and self.current_position_contracts == 0.0:
-            self.current_position_contracts = float(self.current_position_shares)
-        # Always ensure shares is populated for backward compat
-        if self.current_position_shares is None:
-            self.current_position_shares = int(self.current_position_contracts)
-        # runner_target: sync both directions
-        if self.runner_target_shares is not None and self.runner_target_contracts is None:
-            self.runner_target_contracts = float(self.runner_target_shares)
-        if self.runner_target_contracts is not None and self.runner_target_shares is None:
-            self.runner_target_shares = int(self.runner_target_contracts)
+    def _validate_position_qty(self) -> "ThesisState":
+        if self.current_position_qty < -EPSILON:
+            raise ValueError("current_position_qty must be non-negative")
+        if abs(self.current_position_qty) <= EPSILON:
+            self.current_position_qty = 0.0
+        if self.original_base_qty < -EPSILON:
+            raise ValueError("original_base_qty must be non-negative")
+        if abs(self.original_base_qty) <= EPSILON:
+            self.original_base_qty = 0.0
+        if self.runner_target_qty is not None and self.runner_target_qty < -EPSILON:
+            raise ValueError("runner_target_qty must be non-negative")
+        if self.dust_qty < -EPSILON:
+            raise ValueError("dust_qty must be non-negative")
+        if abs(self.dust_qty) <= EPSILON:
+            self.dust_qty = 0.0
+        if self.dust_notional < -EPSILON:
+            raise ValueError("dust_notional must be non-negative")
+        if abs(self.dust_notional) <= EPSILON:
+            self.dust_notional = 0.0
+        return self
+
+
+class PendingOrder(BaseModel):
+    model_config = {"extra": "forbid"}
+    oid: Optional[int] = None
+    client_order_id: Optional[str] = None
+    symbol: Optional[str] = None
+    action: str
+    side: str
+    reduce_only: bool = False
+    order_type: str = "limit"
+    qty: float = 0.0
+    qty_submitted: float = 0.0
+    qty_filled: float = 0.0
+    qty_remaining: float = 0.0
+    limit_px: float
+    status: str
+    created_at: datetime
+    last_checked_at: Optional[datetime] = None
+    source_decision_id: Optional[str] = None
+    state_before: Optional[str] = None
+    intended_state_after: Optional[str] = None
+    applied_state_after: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_qty(self) -> "PendingOrder":
+        if self.qty < -EPSILON:
+            raise ValueError("pending order qty must be non-negative")
+        if abs(self.qty) <= EPSILON:
+            self.qty = 0.0
+        if self.qty_submitted <= EPSILON and self.qty > EPSILON:
+            self.qty_submitted = self.qty
+        if self.qty_remaining <= EPSILON and self.qty_submitted > EPSILON:
+            self.qty_remaining = self.qty_submitted - self.qty_filled
+        if abs(self.qty_submitted) <= EPSILON:
+            self.qty_submitted = 0.0
+        if abs(self.qty_filled) <= EPSILON:
+            self.qty_filled = 0.0
+        if abs(self.qty_remaining) <= EPSILON:
+            self.qty_remaining = 0.0
         return self
 
 
@@ -168,45 +220,137 @@ class ActionType(str, Enum):
     SELL_EVENT_DERISKING = "sell_event_derisking"
     EXIT_ALL             = "exit_all"
     HALT                 = "halt"
+    RECONCILE_POSITION   = "reconcile_position"
 
 
 class Decision(BaseModel):
+    model_config = {"extra": "forbid"}
     action:                   ActionType
-    contracts:                float                      = 0.0  # primary (new)
+    qty:                      float                      = 0.0
     reason:                   str
     blockers:                 List[str]                  = []
     new_state:                Optional[BotState]         = None
     new_protect_profit_mode:  Optional[bool]             = None
     indicators:               Optional[IndicatorSnapshot] = None
-    shares:                   int                        = 0    # compat — kept as int
 
     @model_validator(mode="after")
-    def _sync_contracts(self) -> "Decision":
-        if self.contracts == 0.0 and self.shares != 0:
-            self.contracts = float(self.shares)
-        elif self.contracts != 0.0 and self.shares == 0:
-            self.shares = int(self.contracts)
+    def _validate_qty(self) -> "Decision":
+        if self.qty < -EPSILON:
+            raise ValueError("decision qty must be non-negative")
+        if abs(self.qty) <= EPSILON:
+            self.qty = 0.0
         return self
 
 
 # ── Fill ──────────────────────────────────────────────────────────────────────
 
 class Fill(BaseModel):
+    model_config = {"extra": "forbid"}
     action:       ActionType
-    contracts:    float    = 0.0   # primary (new)
+    qty:          float    = 0.0
     fill_price:   float
     slippage_bps: float
     realized_pnl: float   = 0.0
     commission:   float   = 0.0
     timestamp:    datetime
-    shares:       int      = 0    # compat — kept as int
+    order_id:     Optional[int] = None
+    order_status: Optional[str] = None
 
     @model_validator(mode="after")
-    def _sync_contracts(self) -> "Fill":
-        if self.contracts == 0.0 and self.shares != 0:
-            self.contracts = float(self.shares)
-        elif self.contracts != 0.0 and self.shares == 0:
-            self.shares = int(self.contracts)
+    def _validate_qty(self) -> "Fill":
+        if self.qty < -EPSILON:
+            raise ValueError("fill qty must be non-negative")
+        if abs(self.qty) <= EPSILON:
+            self.qty = 0.0
+        return self
+
+
+class OrderResultStatus(str, Enum):
+    BLOCKED_PRE_ORDER = "blocked_pre_order"
+    SUBMITTED_UNFILLED = "submitted_unfilled"
+    PARTIALLY_FILLED = "partially_filled"
+    FILLED = "filled"
+    REJECTED = "rejected"
+    CANCELED = "canceled"
+    CANCEL_FAILED = "cancel_failed"
+    UNKNOWN = "unknown"
+    EXECUTION_ERROR = "execution_error"
+
+
+class ActionClass(str, Enum):
+    OPENING = "opening"
+    ADDING = "adding"
+    RISK_REDUCING = "risk_reducing"
+    EMERGENCY_EXIT = "emergency_exit"
+    CANCEL = "cancel"
+    NON_ORDER = "non_order"
+
+
+class OrderResult(BaseModel):
+    model_config = {"extra": "forbid"}
+    status: OrderResultStatus
+    oid: Optional[int] = None
+    client_order_id: Optional[str] = None
+    action: ActionType
+    side: str
+    reduce_only: bool = False
+    submitted_qty: float = 0.0
+    filled_qty: float = 0.0
+    remaining_qty: float = 0.0
+    avg_fill_px: Optional[float] = None
+    limit_px: Optional[float] = None
+    realized_pnl: float = 0.0
+    commission: float = 0.0
+    raw_status_sanitized: Optional[str] = None
+    exchange_error_sanitized: Optional[str] = None
+    state_before: Optional[str] = None
+    intended_state_after: Optional[str] = None
+    applied_state_after: Optional[str] = None
+    created_at: datetime
+
+    @model_validator(mode="after")
+    def _validate_qtys(self) -> "OrderResult":
+        for field in ("submitted_qty", "filled_qty", "remaining_qty", "realized_pnl", "commission"):
+            value = getattr(self, field)
+            if field in {"submitted_qty", "filled_qty", "remaining_qty"} and value < -EPSILON:
+                raise ValueError(f"{field} must be non-negative")
+            if abs(value) <= EPSILON:
+                setattr(self, field, 0.0)
+        if self.remaining_qty <= EPSILON and self.submitted_qty > EPSILON:
+            remaining = self.submitted_qty - self.filled_qty
+            self.remaining_qty = 0.0 if abs(remaining) <= EPSILON else max(remaining, 0.0)
+        return self
+
+
+class ReconciliationStatus(str, Enum):
+    OK = "ok"
+    REFRESHED_PENDING_ORDER = "refreshed_pending_order"
+    RECONSTRUCTED_POSITION = "reconstructed_position"
+    CLEARED_PENDING_ORDER = "cleared_pending_order"
+    HALTED = "halted"
+
+
+class ReconciliationResult(BaseModel):
+    model_config = {"extra": "forbid"}
+    status: ReconciliationStatus
+    reason: str
+    exchange_position_qty: float = 0.0
+    local_position_qty: float = 0.0
+    open_orders_count: int = 0
+    matched_fill_count: int = 0
+    reconstructed_avg_entry_price: Optional[float] = None
+    reconstructed_qty: float = 0.0
+    pending_order_updated: bool = False
+    halt_reason: Optional[str] = None
+    applied_state_after: Optional[str] = None
+    notes: List[str] = []
+
+    @model_validator(mode="after")
+    def _validate_qtys(self) -> "ReconciliationResult":
+        for field in ("exchange_position_qty", "local_position_qty", "reconstructed_qty"):
+            value = getattr(self, field)
+            if abs(value) <= EPSILON:
+                setattr(self, field, 0.0)
         return self
 
 
@@ -246,3 +390,4 @@ class BotConfig(BaseModel):
     notifications: dict
     # HL Phase 1: optional Hyperliquid-specific config block
     hl:            Optional[dict] = None
+    probe:         Optional[dict] = None

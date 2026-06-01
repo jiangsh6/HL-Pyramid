@@ -15,6 +15,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.core.config_loader import load_config
+from src.core.models import EPSILON
+from src.hl.account import get_account_snapshot
+from src.hl.client import HyperliquidClient
 from src.reporting.state_writer import read_state, reset_state_to_flat, write_state
 
 
@@ -42,6 +45,31 @@ def main(argv=None) -> int:
         return 1
 
     state = read_state(str(state_path))
+    if state.current_position_qty > EPSILON or state.pending_order is not None:
+        print(
+            "ERROR: refusing reset while local state still has a position or "
+            "pending order. Reconcile/flatten/cancel first.",
+            file=sys.stderr,
+        )
+        return 1
+    if cfg.hl and cfg.bot.get("mode") in {"testnet", "mainnet"}:
+        hl_cfg = cfg.hl
+        client = HyperliquidClient(network=hl_cfg.get("network", "testnet"))
+        snapshot = get_account_snapshot(
+            hl_cfg.get("wallet_address", ""),
+            client,
+            include_open_orders=True,
+            collateral_mode=hl_cfg.get("collateral_mode", "unified"),
+        )
+        coin = hl_cfg.get("coin", cfg.symbol.get("ticker", state.symbol))
+        exchange_pos = next((pos for pos in snapshot.positions if pos.coin == coin), None)
+        exchange_qty = exchange_pos.qty if exchange_pos is not None else 0.0
+        if exchange_qty > EPSILON or snapshot.open_orders_count > 0:
+            print(
+                "ERROR: refusing reset while exchange still has a position or open order.",
+                file=sys.stderr,
+            )
+            return 1
     prev = state.state.value
     reset_state_to_flat(state)
     write_state(state, str(state_path))

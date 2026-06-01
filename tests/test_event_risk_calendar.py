@@ -10,6 +10,7 @@ All 4 named tests:
 from __future__ import annotations
 
 from datetime import date
+import os
 from unittest.mock import patch
 
 import pytest
@@ -61,7 +62,8 @@ def test_update_event_risk_uses_config_flag():
     from src.core.config_loader import load_config
     from src.core.models import BotState
 
-    config = load_config("config/btc_long_thesis.yaml")
+    with patch.dict(os.environ, {"HL_TESTNET_ACCOUNT_ADDRESS": "0x1111111111111111111111111111111111111111"}, clear=False):
+        config = load_config("config/btc_long_thesis.yaml")
     # Enable event_risk with use_calendar_days
     config.event_risk["enabled"] = True
     config.event_risk["use_calendar_days"] = True

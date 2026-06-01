@@ -35,7 +35,7 @@ def test_paper_broker_is_stateless():
     cfg = base_config()
     state = make_state()
     state_snapshot = state.model_dump()
-    decision = Decision(action=ActionType.BUY_STARTER, shares=10, reason="t")
+    decision = Decision(action=ActionType.BUY_STARTER, qty=10, reason="t")
     execute(decision, fill_ref_price=900.0, state=state, config=cfg)
     assert state.model_dump() == state_snapshot
 
@@ -44,7 +44,7 @@ def test_paper_broker_buy_applies_positive_slippage():
     random.seed(0)
     cfg = base_config()
     state = make_state()
-    decision = Decision(action=ActionType.BUY_STARTER, shares=10, reason="t")
+    decision = Decision(action=ActionType.BUY_STARTER, qty=10, reason="t")
     fill = execute(decision, fill_ref_price=100.0, state=state, config=cfg)
     assert fill.fill_price >= 100.0
     assert 0.0 <= fill.slippage_bps <= cfg.execution["max_slippage_bps"] + 1e-6
@@ -57,9 +57,9 @@ def test_paper_broker_sell_applies_negative_slippage():
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 100.0, 10),
         avg_entry_price=100.0,
-        current_position_shares=10,
+        current_position_qty=10,
     )
-    decision = Decision(action=ActionType.SELL_STOP, shares=10, reason="t")
+    decision = Decision(action=ActionType.SELL_STOP, qty=10, reason="t")
     fill = execute(decision, fill_ref_price=120.0, state=state, config=cfg)
     assert fill.fill_price <= 120.0
 
@@ -67,7 +67,7 @@ def test_paper_broker_sell_applies_negative_slippage():
 def test_paper_broker_commission_is_zero():
     cfg = base_config()
     state = make_state()
-    decision = Decision(action=ActionType.BUY_STARTER, shares=10, reason="t")
+    decision = Decision(action=ActionType.BUY_STARTER, qty=10, reason="t")
     fill = execute(decision, fill_ref_price=100.0, state=state, config=cfg)
     assert fill.commission == 0.0
 
@@ -75,7 +75,7 @@ def test_paper_broker_commission_is_zero():
 def test_paper_broker_buy_realized_pnl_is_zero():
     cfg = base_config()
     state = make_state()
-    decision = Decision(action=ActionType.BUY_STARTER, shares=10, reason="t")
+    decision = Decision(action=ActionType.BUY_STARTER, qty=10, reason="t")
     fill = execute(decision, fill_ref_price=100.0, state=state, config=cfg)
     assert fill.realized_pnl == 0.0
 
@@ -88,11 +88,11 @@ def test_paper_broker_sell_realized_pnl_uses_lifo_cost_basis():
         base_lot=make_lot("base", 100.0, 10),
         addon_lots=[make_lot("add_1", 110.0, 5)],
         avg_entry_price=103.33,
-        current_position_shares=15,
+        current_position_qty=15,
     )
-    decision = Decision(action=ActionType.SELL_TAKE_PROFIT, shares=5, reason="t")
+    decision = Decision(action=ActionType.SELL_TAKE_PROFIT, qty=5, reason="t")
     fill = execute(decision, fill_ref_price=130.0, state=state, config=cfg)
-    # LIFO: 5 shares from add_1 @ 110 → realized = (130-110)*5 = 100
+    # LIFO: 5 qty from add_1 @ 110 → realized = (130-110)*5 = 100
     assert abs(fill.realized_pnl - 100.0) < 1e-6
 
 
@@ -104,10 +104,10 @@ def test_paper_broker_sell_spans_addons_and_base():
         base_lot=make_lot("base", 100.0, 10),
         addon_lots=[make_lot("add_1", 110.0, 4)],
         avg_entry_price=102.85,
-        current_position_shares=14,
+        current_position_qty=14,
     )
     # Sell 8 → 4 from add_1 @110 + 4 from base @100
-    decision = Decision(action=ActionType.EXIT_ALL, shares=8, reason="t")
+    decision = Decision(action=ActionType.EXIT_ALL, qty=8, reason="t")
     fill = execute(decision, fill_ref_price=130.0, state=state, config=cfg)
     expected = (130 - 110) * 4 + (130 - 100) * 4
     assert abs(fill.realized_pnl - expected) < 1e-6
@@ -117,7 +117,7 @@ def test_paper_broker_slippage_bounded_by_max():
     """Run many fills; slippage_bps must stay within [0, max_slippage_bps]."""
     cfg = base_config()
     state = make_state()
-    decision = Decision(action=ActionType.BUY_STARTER, shares=1, reason="t")
+    decision = Decision(action=ActionType.BUY_STARTER, qty=1, reason="t")
     max_bps = cfg.execution["max_slippage_bps"]
     for _ in range(200):
         fill = execute(decision, fill_ref_price=100.0, state=state, config=cfg)
@@ -126,9 +126,9 @@ def test_paper_broker_slippage_bounded_by_max():
 
 # ── state_writer.apply_fill() ────────────────────────────────────────────────
 
-def _fill(action, shares, fill_price, realized_pnl=0.0, ts_date="2026-05-27"):
+def _fill(action, qty, fill_price, realized_pnl=0.0, ts_date="2026-05-27"):
     return Fill(
-        action=action, shares=shares, fill_price=fill_price,
+        action=action, qty=qty, fill_price=fill_price,
         slippage_bps=0.0, realized_pnl=realized_pnl, commission=0.0,
         timestamp=datetime.fromisoformat(f"{ts_date}T16:00:00"),
     )
@@ -136,12 +136,12 @@ def _fill(action, shares, fill_price, realized_pnl=0.0, ts_date="2026-05-27"):
 
 def test_apply_fill_buy_starter_creates_base_lot():
     state = make_state()
-    fill = _fill(ActionType.BUY_STARTER, shares=10, fill_price=100.0)
+    fill = _fill(ActionType.BUY_STARTER, qty=10, fill_price=100.0)
     apply_fill(state, fill)
     assert state.base_lot is not None
-    assert state.base_lot.shares == 10
+    assert state.base_lot.qty == 10
     assert state.base_lot.entry_price == 100.0
-    assert state.current_position_shares == 10
+    assert state.current_position_qty == 10
     assert state.avg_entry_price == 100.0
     assert state.last_add_price == 100.0
     assert state.entry_date == date(2026, 5, 27)
@@ -152,15 +152,15 @@ def test_apply_fill_buy_base_combines_with_existing_starter():
         state=BotState.STARTER_LONG,
         base_lot=make_lot("base", 100.0, 5),
         avg_entry_price=100.0,
-        current_position_shares=5,
+        current_position_qty=5,
         entry_date=date(2026, 5, 20),
     )
-    fill = _fill(ActionType.BUY_BASE, shares=10, fill_price=110.0)
+    fill = _fill(ActionType.BUY_BASE, qty=10, fill_price=110.0)
     apply_fill(state, fill)
-    # Combined: 5@100 + 10@110 = 15 shares; avg = (500+1100)/15 = 106.667
-    assert state.base_lot.shares == 15
+    # Combined: 5@100 + 10@110 = 15 qty; avg = (500+1100)/15 = 106.667
+    assert state.base_lot.qty == 15
     assert abs(state.base_lot.entry_price - 106.6667) < 0.01
-    assert state.current_position_shares == 15
+    assert state.current_position_qty == 15
     assert state.entry_date == date(2026, 5, 20)   # original kept
 
 
@@ -169,16 +169,16 @@ def test_apply_fill_buy_addon_appends_and_increments_count():
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 100.0, 10),
         avg_entry_price=100.0,
-        current_position_shares=10,
+        current_position_qty=10,
     )
-    fill = _fill(ActionType.BUY_ADDON, shares=5, fill_price=110.0)
+    fill = _fill(ActionType.BUY_ADDON, qty=5, fill_price=110.0)
     apply_fill(state, fill)
     assert len(state.addon_lots) == 1
     assert state.addon_lots[0].lot_id == "add_1"
-    assert state.addon_lots[0].shares == 5
+    assert state.addon_lots[0].qty == 5
     assert state.add_count == 1
     assert state.last_add_price == 110.0
-    assert state.current_position_shares == 15
+    assert state.current_position_qty == 15
 
 
 def test_apply_fill_sell_lifo_reduces_addons_first():
@@ -190,16 +190,16 @@ def test_apply_fill_sell_lifo_reduces_addons_first():
             make_lot("add_2", 120.0, 6),
         ],
         avg_entry_price=110.0,
-        current_position_shares=20,
+        current_position_qty=20,
     )
-    fill = _fill(ActionType.SELL_TAKE_PROFIT, shares=6,
+    fill = _fill(ActionType.SELL_TAKE_PROFIT, qty=6,
                  fill_price=130.0, realized_pnl=60.0)
     apply_fill(state, fill)
-    # add_2 (6 shares) fully consumed; add_1 + base untouched
+    # add_2 (6 qty) fully consumed; add_1 + base untouched
     assert len(state.addon_lots) == 1
     assert state.addon_lots[0].lot_id == "add_1"
-    assert state.base_lot.shares == 10
-    assert state.current_position_shares == 14
+    assert state.base_lot.qty == 10
+    assert state.current_position_qty == 14
     assert state.realized_pnl == 60.0
 
 
@@ -209,29 +209,60 @@ def test_apply_fill_avg_entry_recalculated_after_every_fill():
         base_lot=make_lot("base", 100.0, 10),
         addon_lots=[make_lot("add_1", 110.0, 5)],
         avg_entry_price=103.33,
-        current_position_shares=15,
+        current_position_qty=15,
     )
-    fill = _fill(ActionType.SELL_TAKE_PROFIT, shares=5,
+    fill = _fill(ActionType.SELL_TAKE_PROFIT, qty=5,
                  fill_price=130.0, realized_pnl=100.0)
     apply_fill(state, fill)
     # Only base remains: avg = 100
     assert state.avg_entry_price == 100.0
-    assert state.current_position_shares == 10
+    assert state.current_position_qty == 10
     assert state.addon_lots == []
 
 
-def test_apply_fill_sell_drops_base_lot_when_shares_reach_zero():
+def test_log_cycle_marks_zero_qty_fill_as_submitted_unfilled(tmp_path):
+    cfg = base_config()
+    state = make_state(symbol="BTC")
+    decision = Decision(action=ActionType.BUY_STARTER, qty=0.001, reason="probe")
+    fill = Fill(
+        action=ActionType.BUY_STARTER,
+        qty=0.0,
+        fill_price=50000.0,
+        slippage_bps=0.0,
+        realized_pnl=0.0,
+        commission=0.0,
+        timestamp=datetime.now(),
+    )
+    indicators = make_indicators(adj_close=50000.0)
+
+    log_cycle(
+        run_dir=str(tmp_path),
+        state=state,
+        decision=decision,
+        fill=fill,
+        indicators=indicators,
+        equity=1000.0,
+        state_before="FLAT",
+        state_after="FLAT",
+        config_hash="abc123",
+    )
+
+    orders = (tmp_path / "orders.csv").read_text().strip().splitlines()
+    assert "submitted_unfilled" in orders[-1]
+
+
+def test_apply_fill_sell_drops_base_lot_when_qty_reaches_zero():
     state = make_state(
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 100.0, 10),
         avg_entry_price=100.0,
-        current_position_shares=10,
+        current_position_qty=10,
     )
-    fill = _fill(ActionType.EXIT_ALL, shares=10,
+    fill = _fill(ActionType.EXIT_ALL, qty=10,
                  fill_price=120.0, realized_pnl=200.0)
     apply_fill(state, fill)
     assert state.base_lot is None
-    assert state.current_position_shares == 0
+    assert state.current_position_qty == 0
     assert state.avg_entry_price is None
     assert state.realized_pnl == 200.0
 
@@ -244,7 +275,7 @@ def test_state_json_roundtrip(tmp_path):
         base_lot=make_lot("base", 900.0, 22),
         addon_lots=[make_lot("add_1", 945.0, 8)],
         avg_entry_price=924.06,
-        current_position_shares=30,
+        current_position_qty=30,
         add_count=1,
         last_add_price=945.0,
         highest_price_since_entry=1000.0,
@@ -256,8 +287,8 @@ def test_state_json_roundtrip(tmp_path):
     write_state(state, str(p))
     loaded = read_state(str(p))
     assert loaded.state == BotState.PYRAMID_LONG
-    assert loaded.current_position_shares == 30
-    assert loaded.base_lot.shares == 22
+    assert loaded.current_position_qty == 30
+    assert loaded.base_lot.qty == 22
     assert loaded.addon_lots[0].lot_id == "add_1"
 
 
@@ -269,7 +300,7 @@ def test_reset_state_to_flat_clears_all_runtime_fields():
         base_lot=make_lot("base", 100.0, 10),
         addon_lots=[make_lot("add_1", 110.0, 5)],
         avg_entry_price=103.33,
-        current_position_shares=15,
+        current_position_qty=15,
         add_count=1,
         protect_profit_mode=True,
         realized_pnl=-5000.0,
@@ -277,13 +308,13 @@ def test_reset_state_to_flat_clears_all_runtime_fields():
         halt_reason="max_thesis_loss",
         target_price_tp_triggered=True,
         runner_mode_active=True,
-        runner_target_shares=7,
+        runner_target_qty=7,
     )
     reset_state_to_flat(state)
     assert state.state == BotState.FLAT
     assert state.base_lot is None
     assert state.addon_lots == []
-    assert state.current_position_shares == 0
+    assert state.current_position_qty == 0
     assert state.add_count == 0
     assert state.protect_profit_mode is False
     assert state.realized_pnl == 0.0
@@ -291,7 +322,7 @@ def test_reset_state_to_flat_clears_all_runtime_fields():
     assert state.halt_reason is None
     assert state.target_price_tp_triggered is False
     assert state.runner_mode_active is False
-    assert state.runner_target_shares is None
+    assert state.runner_target_qty is None
     assert state.tp_levels_triggered == [False, False, False, False]
 
 
@@ -314,7 +345,7 @@ def test_log_cycle_writes_all_four_csvs_including_no_action(tmp_path):
     cfg = base_config()
     state = make_state()
     decision = Decision(
-        action=ActionType.NO_ACTION, shares=0, reason="no_trigger",
+        action=ActionType.NO_ACTION, qty=0, reason="no_trigger",
         blockers=["close_below_ma20"],
     )
     ind = make_indicators(adj_close=94.0, ma20=95.0)
@@ -342,7 +373,7 @@ def test_daily_summary_includes_required_fields():
         base_lot=make_lot("base", 900.0, 22),
         addon_lots=[make_lot("add_1", 945.0, 8)],
         avg_entry_price=924.06,
-        current_position_shares=30,
+        current_position_qty=30,
         add_count=2,
         highest_price_since_entry=1100.0,
         trailing_stop_price=990.0,

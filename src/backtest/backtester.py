@@ -109,7 +109,7 @@ def run_backtest(
         # Step 4, but that uses indicators.high which is the same value.
         # We replicate the standalone update here so the backtest loop is
         # self-contained and identical to Section 21.3.
-        if state.current_position_shares > 0:
+        if state.current_position_qty > 0:
             bar_high = float(row_t["high"])
             state.highest_price_since_entry = max(
                 state.highest_price_since_entry or 0.0, bar_high
@@ -135,7 +135,7 @@ def run_backtest(
         fill = None
         gap_loss = False
         fill_price_used: Optional[float] = None
-        fill_shares_signed = 0
+        fill_qty_signed = 0
         fill_realized_pnl = 0.0
         funding_payment = 0.0
         next_open = float(row_t1["open"])
@@ -155,10 +155,10 @@ def run_backtest(
             apply_fill(state, fill)
             fill_price_used = fill.fill_price
 
-            # Determine sign of shares (positive = buy, negative = sell)
+            # Determine sign of qty (positive = buy, negative = sell)
             buy_actions = {ActionType.BUY_STARTER, ActionType.BUY_BASE, ActionType.BUY_ADDON}
-            fill_shares_signed = (
-                fill.shares if decision.action in buy_actions else -fill.shares
+            fill_qty_signed = (
+                fill.qty if decision.action in buy_actions else -fill.qty
             )
 
             # Capture realized PnL from the Fill object before state is mutated
@@ -173,10 +173,10 @@ def run_backtest(
         if config.data.get("source") == "hyperliquid":
             bar_date = row_t.get("date", row_t.name)
             rate = (funding_rates or {}).get(bar_date, 0.0)
-            if state.current_position_contracts > 0 and rate != 0.0:
+            if state.current_position_qty > 0 and rate != 0.0:
                 funding_payment = calc_funding_payment(
                     rate,
-                    state.current_position_contracts,
+                    state.current_position_qty,
                     float(row_t["close"]),
                     hours=bar_hours,
                 )
@@ -186,7 +186,7 @@ def run_backtest(
 
         # ── Step 5: log ────────────────────────────────────────────────────────
         exposure_pct = (
-            state.current_position_shares * float(row_t["adj_close"]) / equity
+            state.current_position_qty * float(row_t["adj_close"]) / equity
             if equity > 0 else 0.0
         )
 
@@ -194,10 +194,10 @@ def run_backtest(
             bar_date=row_t.get("date", row_t.name),
             adj_close=float(row_t["adj_close"]),
             open_price=float(row_t["open"]),
-            shares=state.current_position_shares,
+            qty=state.current_position_qty,
             avg_entry_price=state.avg_entry_price,
             fill_price=fill_price_used,
-            fill_shares=fill_shares_signed,
+            fill_qty=fill_qty_signed,
             action=decision.action,
             state_name=state_after,
             in_event_window=_in_event_window(state, config),
@@ -224,7 +224,7 @@ def run_backtest(
 
     # ── metrics ───────────────────────────────────────────────────────────────
     decision_records = [r for r in records if r.action != ActionType.NO_ACTION
-                        or r.shares > 0]
+                        or r.qty > 0]
 
     first_close = float(df["adj_close"].iloc[0]) if len(df) > 0 else None
     last_close  = float(df["adj_close"].iloc[-1]) if len(df) > 0 else None
@@ -262,10 +262,10 @@ def _make_warmup_record(row: Any, state: ThesisState, equity: float) -> Backtest
         bar_date=row.get("date", getattr(row, "name", None)),
         adj_close=adj,
         open_price=float(row["open"]),
-        shares=0,
+        qty=0,
         avg_entry_price=None,
         fill_price=None,
-        fill_shares=0,
+        fill_qty=0,
         action=ActionType.NO_ACTION,
         state_name=state.state.value,
         in_event_window=False,

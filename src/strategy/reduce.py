@@ -1,58 +1,41 @@
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 from src.core.models import (
-    ActionType, BotConfig, BotState, Decision, IndicatorSnapshot, LotRecord, ThesisState,
+    EPSILON, ActionType, BotConfig, BotState, Decision, IndicatorSnapshot, LotRecord, ThesisState,
 )
 
 
 def lifo_reduce(
     addon_lots: List[LotRecord],
-    contracts_to_sell: float = 0.0,
+    qty_to_sell: float = 0.0,
     sz_decimals: int = 0,
     min_size: float = 0.0,
-    # Backward-compat alias — old callers pass shares_to_sell=N as a keyword arg
-    shares_to_sell: Optional[float] = None,
 ) -> Tuple[List[LotRecord], float]:
     """
     Reduce add-on lots LIFO (latest lot first).  Section 13.1.
-
-    Parameters
-    ----------
-    addon_lots       : current list of add-on lots (latest is index -1).
-    contracts_to_sell: float contracts to remove (primary parameter).
-    sz_decimals      : decimal places to round remaining contracts to.
-    min_size         : lots with remaining contracts below this are dropped.
-    shares_to_sell   : deprecated compat alias for contracts_to_sell.
-
-    Returns
-    -------
-    (updated_lots, actual_contracts_sold)
     """
-    if shares_to_sell is not None:
-        contracts_to_sell = float(shares_to_sell)
-
-    remaining = contracts_to_sell
+    remaining = float(qty_to_sell)
     updated: List[LotRecord] = []
     for lot in reversed(addon_lots):
-        if remaining <= 0:
+        if remaining <= EPSILON:
             updated.insert(0, lot)
             continue
-        sell              = min(lot.contracts, remaining)
+        sell              = min(lot.qty, remaining)
         remaining        -= sell
-        new_contracts     = round(lot.contracts - sell, sz_decimals)
-        if new_contracts > min_size:
+        new_qty           = round(lot.qty - sell, sz_decimals) if sz_decimals > 0 else lot.qty - sell
+        if new_qty > max(min_size, EPSILON):
             updated.insert(
                 0,
                 LotRecord(
                     lot_id=lot.lot_id,
                     entry_price=lot.entry_price,
-                    contracts=new_contracts,
+                    qty=new_qty,
                     entry_date=lot.entry_date,
                 ),
             )
-    return updated, contracts_to_sell - remaining
+    return updated, float(qty_to_sell) - remaining
 
 
 def drawdown_from_peak(state: ThesisState, indicators: IndicatorSnapshot) -> float:
@@ -90,10 +73,10 @@ def check_addon_reduce(
     rule_c = drawdown_from_peak(state, indicators) >= dd_thresh
 
     if rule_b or rule_c:
-        total = sum(l.shares for l in state.addon_lots)
+        total = sum(l.qty for l in state.addon_lots)
         return Decision(
             action=ActionType.SELL_REDUCE_ADDON,
-            shares=total,
+            qty=total,
             reason="addon_reduce_all_" + ("ma10" if rule_b else "drawdown"),
             new_state=_new_state_for_reduce(state),
             indicators=indicators,
@@ -102,7 +85,7 @@ def check_addon_reduce(
         latest = state.addon_lots[-1]
         return Decision(
             action=ActionType.SELL_REDUCE_ADDON,
-            shares=latest.shares,
+            qty=latest.qty,
             reason="addon_reduce_latest_ma5",
             new_state=_new_state_for_reduce(state),
             indicators=indicators,
@@ -116,7 +99,7 @@ def check_base_reduce(
     config: BotConfig,
 ) -> Optional[Decision]:
     """Section 13.3 with cascade dedup (Rule F overrides D and E)."""
-    if state.base_lot is None or state.base_lot.shares <= 0:
+    if state.base_lot is None or state.base_lot.qty <= EPSILON:
         return None
     if not config.reduce.get("enabled", False):
         return None
@@ -129,7 +112,7 @@ def check_base_reduce(
     if rule_f:
         return Decision(
             action=ActionType.EXIT_ALL,
-            shares=state.current_position_shares,
+            qty=state.current_position_qty,
             reason="base_reduce_exit_ma50",
             new_state=BotState.EXITED,
             indicators=indicators,
@@ -143,12 +126,12 @@ def check_base_reduce(
     rule_e = drawdown_from_peak(state, indicators) >= dd_thresh
 
     if rule_d or rule_e:
-        half = state.base_lot.shares // 2
-        if half <= 0:
+        half = state.base_lot.qty * 0.5
+        if half <= EPSILON:
             return None
         return Decision(
             action=ActionType.SELL_REDUCE_BASE,
-            shares=half,
+            qty=half,
             reason="base_reduce_half_" + ("ma20" if rule_d else "drawdown"),
             new_state=_new_state_for_reduce(state),
             indicators=indicators,
@@ -158,23 +141,18 @@ def check_base_reduce(
 
 def recalc_avg_entry_price(state: ThesisState) -> None:
     """
-    Section 7.2.  Mutates avg_entry_price, current_position_contracts,
-    and current_position_shares (compat).
-
-    Uses lot.contracts (float) as the primary quantity.
+    Section 7.2.  Mutates avg_entry_price and current_position_qty.
     """
     lots = (
-        [state.base_lot] if state.base_lot is not None and state.base_lot.contracts > 0
+        [state.base_lot] if state.base_lot is not None and state.base_lot.qty > EPSILON
         else []
     )
-    lots = lots + [l for l in state.addon_lots if l.contracts > 0]
-    total_contracts = sum(l.contracts for l in lots)
-    if total_contracts <= 0:
+    lots = lots + [l for l in state.addon_lots if l.qty > EPSILON]
+    total_qty = sum(l.qty for l in lots)
+    if total_qty <= EPSILON:
         state.avg_entry_price               = None
-        state.current_position_contracts    = 0.0
-        state.current_position_shares       = 0
+        state.current_position_qty    = 0.0
         return
-    weighted = sum(l.contracts * l.entry_price for l in lots)
-    state.avg_entry_price               = weighted / total_contracts
-    state.current_position_contracts    = total_contracts
-    state.current_position_shares       = int(total_contracts)  # compat truncation
+    weighted = sum(l.qty * l.entry_price for l in lots)
+    state.avg_entry_price               = weighted / total_qty
+    state.current_position_qty          = total_qty

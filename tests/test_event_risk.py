@@ -29,7 +29,7 @@ def test_event_t10_transitions_to_event_risk_mode_only():
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 900.0, 30),
         avg_entry_price=900.0,
-        current_position_shares=30,
+        current_position_qty=30,
         highest_price_since_entry=1000.0,
         trailing_stop_price=800.0,
     )
@@ -49,7 +49,7 @@ def test_event_t10_does_not_generate_orders():
         prior_state=BotState.BASE_LONG,
         base_lot=make_lot("base", 900.0, 5),
         avg_entry_price=900.0,
-        current_position_shares=5,  # low exposure → no de-risking
+        current_position_qty=5,  # low exposure → no de-risking
         highest_price_since_entry=900.0,
         trailing_stop_price=800.0,
         days_to_event=10,
@@ -67,7 +67,7 @@ def test_event_t5_de_risking_generates_sell_order():
         prior_state=BotState.BASE_LONG,
         base_lot=make_lot("base", 100.0, 800),
         avg_entry_price=100.0,
-        current_position_shares=800,  # 80k exposure → 80%
+        current_position_qty=800,  # 80k exposure → 80%
         highest_price_since_entry=110.0,
         trailing_stop_price=90.0,
     )
@@ -77,8 +77,8 @@ def test_event_t5_de_risking_generates_sell_order():
     d = check_event_derisking(state, ind, cfg)
     assert d is not None
     assert d.action == ActionType.SELL_EVENT_DERISKING
-    # reduce to 50% → 500 shares → sell 300
-    assert d.shares == 300
+    # reduce to 50% → 500 qty → sell 300
+    assert d.qty == 300
 
 
 def test_event_t2_reduces_to_core_20pct():
@@ -88,7 +88,7 @@ def test_event_t2_reduces_to_core_20pct():
         prior_state=BotState.BASE_LONG,
         base_lot=make_lot("base", 100.0, 500),
         avg_entry_price=100.0,
-        current_position_shares=500,
+        current_position_qty=500,
         highest_price_since_entry=110.0,
         trailing_stop_price=90.0,
     )
@@ -97,8 +97,8 @@ def test_event_t2_reduces_to_core_20pct():
                           ma5=99, ma10=99, ma20=99, ma50=95)
     d = check_event_derisking(state, ind, cfg)
     assert d is not None
-    # reduce to 20% → 200 shares → sell 300
-    assert d.shares == 300
+    # reduce to 20% → 200 qty → sell 300
+    assert d.qty == 300
 
 
 def test_event_t1_force_flat_if_configured():
@@ -110,7 +110,7 @@ def test_event_t1_force_flat_if_configured():
         prior_state=BotState.BASE_LONG,
         base_lot=make_lot("base", 100.0, 200),
         avg_entry_price=100.0,
-        current_position_shares=200,
+        current_position_qty=200,
         highest_price_since_entry=110.0,
         trailing_stop_price=90.0,
     )
@@ -119,7 +119,7 @@ def test_event_t1_force_flat_if_configured():
                           ma5=99, ma10=99, ma20=99, ma50=95)
     d = check_event_derisking(state, ind, cfg)
     assert d is not None
-    assert d.shares == 200
+    assert d.qty == 200
     assert d.new_state == BotState.EXITED
 
 
@@ -131,7 +131,7 @@ def test_stop_overrides_event_derisking_on_same_bar():
         prior_state=BotState.BASE_LONG,
         base_lot=make_lot("base", 100.0, 500),
         avg_entry_price=100.0,
-        current_position_shares=500,
+        current_position_qty=500,
         initial_stop_price=80.0,
         trailing_stop_price=90.0,
         highest_price_since_entry=110.0,
@@ -152,7 +152,7 @@ def test_post_event_cooldown_restores_prior_state():
         base_lot=make_lot("base", 100.0, 20),
         addon_lots=[make_lot("add_1", 105.0, 5)],
         avg_entry_price=101.0,
-        current_position_shares=25,
+        current_position_qty=25,
         highest_price_since_entry=110.0,
         trailing_stop_price=90.0,
     )
@@ -172,7 +172,7 @@ def test_post_event_add_count_reset():
         base_lot=make_lot("base", 100.0, 20),
         addon_lots=[make_lot("add_1", 105.0, 5)],
         avg_entry_price=101.0,
-        current_position_shares=25,
+        current_position_qty=25,
         add_count=3,
         highest_price_since_entry=110.0,
         trailing_stop_price=90.0,
@@ -191,7 +191,7 @@ def test_protect_profit_mode_cleared_after_event_reset():
         base_lot=make_lot("base", 100.0, 20),
         addon_lots=[make_lot("add_1", 105.0, 5)],
         avg_entry_price=101.0,
-        current_position_shares=25,
+        current_position_qty=25,
         add_count=4,
         protect_profit_mode=True,
     )

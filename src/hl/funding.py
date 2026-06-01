@@ -1,12 +1,15 @@
 """Hyperliquid funding-rate helpers."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 from src.core.models import ThesisState
 from src.hl.client import HyperliquidClient
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -66,7 +69,19 @@ def get_funding_history(
     for item in response:
         if not isinstance(item, dict):
             continue
-        rate = _as_float(item.get("fundingRate", item.get("funding_rate")))
+        # HL API field name has varied; try every known variant before defaulting.
+        # Logging when all are missing prevents silent zero-funding bugs.
+        if not any(k in item for k in ("fundingRate", "funding", "funding_rate")):
+            _log.warning(
+                "fundingHistory item missing funding rate fields (keys=%s)",
+                sorted(item.keys()),
+            )
+        rate = _as_float(
+            item.get(
+                "fundingRate",
+                item.get("funding", item.get("funding_rate", 0.0)),
+            )
+        )
         position_usd = _as_float(
             item.get("positionUsd", item.get("position_usd", item.get("notionalUsd")))
         )
@@ -111,12 +126,12 @@ def get_predicted_funding(
 
 def calc_funding_payment(
     funding_rate: float,
-    position_contracts: float,
+    position_qty: float,
     mark_price: float,
     hours: float = 1.0,
 ) -> float:
     """Calculate funding payment for a long perp position."""
-    return -1.0 * funding_rate * position_contracts * mark_price * hours
+    return -1.0 * funding_rate * position_qty * mark_price * hours
 
 
 def apply_funding_to_state(

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import os
+from unittest.mock import patch
 
 import pytest
 
@@ -20,12 +21,14 @@ from src.core.models import BotConfig
 
 HL_CONFIG_PATH  = "config/btc_long_thesis.yaml"
 EQ_CONFIG_PATH  = "config/mu_long_thesis.yaml"
+TESTNET_WALLET = "0x1111111111111111111111111111111111111111"
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _load_btc() -> BotConfig:
-    return load_config(HL_CONFIG_PATH)
+    with patch.dict(os.environ, {"HL_TESTNET_ACCOUNT_ADDRESS": TESTNET_WALLET}, clear=False):
+        return load_config(HL_CONFIG_PATH)
 
 
 def _clone(cfg: BotConfig) -> BotConfig:
@@ -116,7 +119,7 @@ def test_live_mode_still_rejected():
 
 def test_unknown_source_rejected():
     """data.source='coinbase' must be rejected."""
-    cfg = load_config(HL_CONFIG_PATH)
+    cfg = _load_btc()
     cfg.data["source"] = "coinbase"
     with pytest.raises(ValueError, match="data.source"):
         validate_config(cfg)

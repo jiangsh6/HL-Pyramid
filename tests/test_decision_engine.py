@@ -31,7 +31,7 @@ def test_engine_halts_on_state_consistency_error():
     state = make_state(
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 900.0, 10),
-        current_position_shares=20,   # mismatch (should be 10)
+        current_position_qty=20,   # mismatch (should be 10)
     )
     ind = make_indicators(adj_close=950.0, ma5=940, ma10=930, ma20=920, ma50=900)
     d = run(state, ind, cfg)
@@ -46,7 +46,7 @@ def test_engine_runs_trailing_stop_update_before_triggers():
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 800.0, 10),
         avg_entry_price=800.0,
-        current_position_shares=10,
+        current_position_qty=10,
         highest_price_since_entry=900.0,
         trailing_stop_price=850.0,
     )
@@ -69,7 +69,7 @@ def test_engine_returns_starter_entry_decision_from_flat():
     d = run(state, ind, cfg)
     assert d.action == ActionType.BUY_STARTER
     assert d.new_state == BotState.STARTER_LONG
-    assert d.shares > 0
+    assert d.qty > 0
 
 
 def test_engine_sets_protect_profit_mode_at_max_add_count():
@@ -79,7 +79,7 @@ def test_engine_sets_protect_profit_mode_at_max_add_count():
         base_lot=make_lot("base", 900.0, 10),
         addon_lots=[make_lot("add_1", 945.0, 4)],
         avg_entry_price=914.4,
-        current_position_shares=14,
+        current_position_qty=14,
         add_count=4,   # equal to max
         trailing_stop_price=800.0,
     )
@@ -94,7 +94,7 @@ def test_engine_sets_protect_profit_mode_at_30pct_unrealized():
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 700.0, 10),
         avg_entry_price=700.0,
-        current_position_shares=10,
+        current_position_qty=10,
         add_count=0,
         trailing_stop_price=600.0,
     )
@@ -113,7 +113,7 @@ def test_engine_returns_trailing_stop_decision_when_breached():
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 800.0, 10),
         avg_entry_price=800.0,
-        current_position_shares=10,
+        current_position_qty=10,
         highest_price_since_entry=900.0,
         trailing_stop_price=850.0,
     )
@@ -131,7 +131,7 @@ def test_engine_stop_overrides_tp_priority():
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 700.0, 10),
         avg_entry_price=700.0,
-        current_position_shares=10,
+        current_position_qty=10,
         initial_stop_price=600.0,
         highest_price_since_entry=1000.0,
         trailing_stop_price=595.0,

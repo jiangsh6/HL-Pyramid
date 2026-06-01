@@ -16,7 +16,7 @@ import math
 from dataclasses import dataclass
 from typing import List
 
-from src.core.models import BotConfig, IndicatorSnapshot, ThesisState
+from src.core.models import EPSILON, BotConfig, IndicatorSnapshot, ThesisState
 
 HALT = "HALT"
 WARN = "WARN"
@@ -77,30 +77,32 @@ def validate_data(
         ))
 
     # ── HALT: state internal consistency ─────────────────────────────────
-    expected_shares = (
-        (state.base_lot.shares if state.base_lot is not None else 0)
-        + sum(lot.shares for lot in state.addon_lots)
+    expected_qty = (
+        (state.base_lot.qty if state.base_lot is not None else 0)
+        + sum(lot.qty for lot in state.addon_lots)
     )
-    if state.current_position_shares != expected_shares:
+    if abs(state.current_position_qty - expected_qty) > EPSILON:
         issues.append(ValidationIssue(
             severity=HALT,
             reason=(
                 f"state_consistency_error: "
-                f"current_position_shares={state.current_position_shares} "
-                f"but base_lot+addons={expected_shares}"
+                f"current_position_qty={state.current_position_qty} "
+                f"but base_lot+addons={expected_qty}"
             ),
         ))
 
-    # ── WARN: liquidation price above initial stop (HL Phase 3) ─────────
+    # ── HALT: liquidation price above initial stop (HL audit H6) ─────────
+    # If the exchange's liq price is above the bot's hard stop, the exchange
+    # would force-liquidate before the bot could exit. Block all trading.
     if (state.liquidation_price is not None
             and state.initial_stop_price is not None
             and state.liquidation_price > state.initial_stop_price):
         issues.append(ValidationIssue(
-            severity=WARN,
+            severity=HALT,
             reason=(
                 f"liquidation_price_above_stop: "
                 f"liq={state.liquidation_price} > initial_stop={state.initial_stop_price}. "
-                f"Hard stop must be raised to avoid forced liquidation."
+                f"Exchange would liquidate before bot stop fires — halting."
             ),
         ))
 

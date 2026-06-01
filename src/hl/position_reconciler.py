@@ -19,7 +19,7 @@ from src.hl.account import HLAccountSnapshot, HLPosition
 @dataclass
 class ReconcileResult:
     status: str                       # "ok" | "warn" | "halt"
-    drift_contracts: float
+    drift_qty: float
     reason: Optional[str] = None
     recommended_action: Optional[str] = None
 
@@ -43,41 +43,41 @@ def reconcile(
     tolerance: float = min_size * 2.0
 
     coin: str = config.hl["coin"] if config.hl else ""
-    state_contracts: float = state.current_position_contracts
+    state_qty: float = state.current_position_qty
 
     hl_pos = next((p for p in hl_snapshot.positions if p.coin == coin), None)
-    hl_contracts: float = hl_pos.contracts if hl_pos is not None else 0.0
+    hl_qty: float = hl_pos.qty if hl_pos is not None else 0.0
 
     # Case 1: both flat
-    if state_contracts == 0.0 and hl_contracts == 0.0:
-        return ReconcileResult(status="ok", drift_contracts=0.0)
+    if state_qty == 0.0 and hl_qty == 0.0:
+        return ReconcileResult(status="ok", drift_qty=0.0)
 
     # Case 2: HL shows 0 but state is long → likely liquidated
-    if hl_contracts == 0.0 and state_contracts > 0.0:
+    if hl_qty == 0.0 and state_qty > 0.0:
         return ReconcileResult(
             status="halt",
-            drift_contracts=state_contracts,
+            drift_qty=state_qty,
             reason="liquidation_detected",
             recommended_action="reset_state_and_investigate",
         )
 
-    drift: float = abs(hl_contracts - state_contracts)
+    drift: float = abs(hl_qty - state_qty)
 
     # Exact match (float epsilon)
     if drift < 1e-9:
-        return ReconcileResult(status="ok", drift_contracts=0.0)
+        return ReconcileResult(status="ok", drift_qty=0.0)
 
     if drift < tolerance:
         return ReconcileResult(
             status="warn",
-            drift_contracts=drift,
+            drift_qty=drift,
             reason="minor_drift_within_tolerance",
             recommended_action="monitor",
         )
 
     return ReconcileResult(
         status="halt",
-        drift_contracts=drift,
+        drift_qty=drift,
         reason="position_mismatch_exceeds_tolerance",
         recommended_action="manual_reconciliation_required",
     )

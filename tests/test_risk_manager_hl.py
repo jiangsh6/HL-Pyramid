@@ -26,7 +26,7 @@ def test_blocks_when_approaching_liquidation_price():
     indicators = make_indicators(adj_close=100.0)
     config     = base_config()
 
-    decision = Decision(action=ActionType.BUY_ADDON, shares=5, reason="test")
+    decision = Decision(action=ActionType.BUY_ADDON, qty=5, reason="test")
     allowed, reason = check_order_allowed(state, decision, config, indicators)
 
     assert not allowed
@@ -40,7 +40,7 @@ def test_blocks_when_margin_ratio_too_high():
     indicators = make_indicators()
     config     = base_config()
 
-    decision = Decision(action=ActionType.BUY_ADDON, shares=5, reason="test")
+    decision = Decision(action=ActionType.BUY_ADDON, qty=5, reason="test")
     allowed, reason = check_order_allowed(
         state, decision, config, indicators, account_value=10_000.0
     )
@@ -56,14 +56,14 @@ def test_allows_when_liq_price_far_away():
     indicators = make_indicators(adj_close=100.0)
     config     = base_config()
 
-    decision = Decision(action=ActionType.BUY_ADDON, shares=5, reason="test")
+    decision = Decision(action=ActionType.BUY_ADDON, qty=5, reason="test")
     _, reason = check_order_allowed(state, decision, config, indicators)
 
     assert reason != "approaching_liquidation_price"
 
 
-def test_liquidation_warn_in_validators_when_liq_above_stop():
-    """validate_data emits a WARN when liquidation_price > initial_stop_price."""
+def test_liquidation_halt_in_validators_when_liq_above_stop():
+    """validate_data emits a HALT when liquidation_price > initial_stop_price."""
     state = make_state(BotState.BASE_LONG)
     state.liquidation_price  = 900.0
     state.initial_stop_price = 800.0   # liq > stop
@@ -74,7 +74,7 @@ def test_liquidation_warn_in_validators_when_liq_above_stop():
     liq_warns = [i for i in issues if "liquidation" in i.reason.lower()]
 
     assert len(liq_warns) == 1
-    assert liq_warns[0].severity == "WARN"
+    assert liq_warns[0].severity == "HALT"
 
 
 # ── Extra coverage ────────────────────────────────────────────────────────────
@@ -86,7 +86,7 @@ def test_no_liq_check_when_liquidation_price_is_none():
     indicators = make_indicators(adj_close=100.0)
     config     = base_config()
 
-    decision = Decision(action=ActionType.BUY_ADDON, shares=5, reason="test")
+    decision = Decision(action=ActionType.BUY_ADDON, qty=5, reason="test")
     _, reason = check_order_allowed(state, decision, config, indicators)
 
     assert reason != "approaching_liquidation_price"
@@ -102,7 +102,7 @@ def test_margin_ratio_uses_starting_equity_when_account_value_not_provided():
     state.margin_used_usd = starting * 0.85
     indicators = make_indicators()
 
-    decision = Decision(action=ActionType.BUY_ADDON, shares=5, reason="test")
+    decision = Decision(action=ActionType.BUY_ADDON, qty=5, reason="test")
     allowed, reason = check_order_allowed(state, decision, config, indicators)
     # No explicit account_value → falls back to starting_equity
     assert not allowed
@@ -130,7 +130,7 @@ def test_liq_check_boundary_exactly_5pct():
     indicators = make_indicators(adj_close=100.0)
     config     = base_config()
 
-    decision = Decision(action=ActionType.BUY_ADDON, shares=5, reason="test")
+    decision = Decision(action=ActionType.BUY_ADDON, qty=5, reason="test")
     _, reason = check_order_allowed(state, decision, config, indicators)
 
     assert reason != "approaching_liquidation_price"

@@ -14,7 +14,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.hl.account import HLAccountSnapshot, HLPosition, HLAPIError, get_account_snapshot
+from src.hl.account import (
+    HLAccountSnapshot,
+    HLPosition,
+    HLAPIError,
+    get_account_snapshot,
+)
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -22,6 +27,16 @@ from src.hl.account import HLAccountSnapshot, HLPosition, HLAPIError, get_accoun
 def _mock_client(response):
     client = MagicMock()
     client.post_info.return_value = response
+    return client
+
+
+def _mock_client_by_type(mapping):
+    client = MagicMock()
+
+    def _post_info(payload):
+        return mapping[payload["type"]]
+
+    client.post_info.side_effect = _post_info
     return client
 
 
@@ -63,13 +78,15 @@ def test_get_account_snapshot_parses_response_correctly():
 
     pos = snapshot.positions[0]
     assert pos.coin          == "BTC"
-    assert pos.contracts     == 0.1
+    assert pos.qty     == 0.1
     assert pos.entry_price   == 50000.0
     assert pos.mark_price    == 51000.0
     assert pos.unrealized_pnl == 100.0
     assert pos.liquidation_price == 45000.0
     assert pos.margin_used   == 1500.0
     assert pos.leverage      == 3.0
+    assert snapshot.perp_account_value == 10000.0
+    assert snapshot.perp_collateral_available is True
 
 
 def test_get_account_snapshot_empty_positions_returns_valid_snapshot():
@@ -175,10 +192,43 @@ def test_get_account_snapshot_mark_price_derived_from_position_value():
 
 
 def test_client_post_info_called_with_correct_payload():
-    """Verifies the correct payload is sent to the HL API."""
-    client   = _mock_client(_VALID_RESPONSE)
+    """Verifies the clearinghouseState payload is sent to the HL API."""
+    client = _mock_client_by_type({
+        "clearinghouseState": _VALID_RESPONSE,
+        "spotClearinghouseState": {"balances": []},
+    })
     get_account_snapshot("0xDEAD", client)
 
-    client.post_info.assert_called_once_with(
-        {"type": "clearinghouseState", "user": "0xDEAD"}
-    )
+    assert client.post_info.call_args_list[0].args[0] == {
+        "type": "clearinghouseState", "user": "0xDEAD"
+    }
+
+
+def test_get_account_snapshot_parses_spot_balances_without_treating_as_perp_margin():
+    """In clearinghouse_only mode, spot USDC is parsed but never treated as collateral."""
+    client = _mock_client_by_type({
+        "clearinghouseState": {
+            "marginSummary": {
+                "accountValue": "0.0",
+                "totalMarginUsed": "0.0",
+            },
+            "withdrawable": "0.0",
+            "assetPositions": [],
+        },
+        "spotClearinghouseState": {
+            "balances": [
+                {"coin": "USDC", "total": "972.84283", "hold": "0.0", "entryNtl": "0.0"},
+                {"coin": "BTC", "total": "0.0", "hold": "0.0", "entryNtl": "0.0"},
+            ]
+        },
+    })
+
+    snapshot = get_account_snapshot("0xABCD", client, collateral_mode="clearinghouse_only")
+
+    assert snapshot.spot_usdc_total == pytest.approx(972.84283)
+    assert snapshot.spot_usdc_hold == 0.0
+    assert snapshot.spot_usdc_available == pytest.approx(972.84283)
+    assert snapshot.perp_collateral_available is False
+    assert snapshot.trading_collateral_available is False
+    assert snapshot.collateral_reason == "spot_balance_not_perp_margin"
+    assert snapshot.effective_trading_collateral == 0.0

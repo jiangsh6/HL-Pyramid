@@ -52,7 +52,7 @@ def check_starter_entry(
 
     return Decision(
         action=ActionType.BUY_STARTER,
-        shares=0,
+        qty=0,
         reason="starter_entry_conditions_met",
         new_state=BotState.STARTER_LONG,
         indicators=indicators,
@@ -92,7 +92,7 @@ def check_pullback_base(
 
     return Decision(
         action=ActionType.BUY_BASE,
-        shares=0,
+        qty=0,
         reason="pullback_base_conditions_met",
         new_state=BotState.BASE_LONG,
         indicators=indicators,
@@ -139,7 +139,7 @@ def check_breakout_base(
 
     return Decision(
         action=ActionType.BUY_BASE,
-        shares=0,
+        qty=0,
         reason="breakout_base_conditions_met",
         new_state=BotState.BASE_LONG,
         indicators=indicators,

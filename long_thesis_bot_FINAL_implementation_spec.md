@@ -1,4 +1,8 @@
-# Long Thesis Pyramiding Bot — Final Implementation Spec
+# ARCHIVED PRE-HL EQUITY SPEC — Long Thesis Pyramiding Bot — Final Implementation Spec
+
+This file is retained as a historical implementation archive. Runtime code now
+uses Hyperliquid perpetual quantity semantics (`qty`, `current_position_qty`,
+`lot.qty`) and must not use equity share semantics.
 ### Version: v0.2.1-final | For use with: Claude Code
 
 > **Lineage:** v0.1 (original) → v0.2 (14 engineering fixes) → v0.2.1 (12 additional patches)

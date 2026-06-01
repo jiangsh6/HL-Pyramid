@@ -72,7 +72,7 @@ def check_order_allowed(
     # ── Daily PnL loss limit ───────────────────────────────────────────────
     starting = config.capital["starting_equity"]
     max_daily_loss = config.risk["max_loss"]["max_daily_loss_pct_of_equity"]
-    if starting > 0 and (state.realized_pnl / starting) <= -max_daily_loss:
+    if starting > 0 and (state.daily_pnl / starting) <= -max_daily_loss:
         return False, "daily_loss_limit_hit"
 
     # ── NaN indicators (belt-and-suspenders) ──────────────────────────────
@@ -100,13 +100,13 @@ def check_order_allowed(
 
     # ── Exposure cap for buy orders ────────────────────────────────────────
     if (decision.action in _BUY_ACTIONS
-            and decision.shares > 0
+            and decision.qty > 0
             and indicators is not None
             and indicators.adj_close > 0):
         max_exposure_pct = float(config.capital.get("max_symbol_exposure_pct", 1.0))
         price = indicators.adj_close
-        current_notional  = state.current_position_shares * price
-        proposed_notional = decision.shares * price
+        current_notional  = state.current_position_qty * price
+        proposed_notional = decision.qty * price
         new_exposure_pct  = (current_notional + proposed_notional) / starting
         if new_exposure_pct > max_exposure_pct:
             return (

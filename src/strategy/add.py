@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 from src.core.models import (
-    ActionType, BotConfig, BotState, Decision, IndicatorSnapshot, ThesisState,
+    EPSILON, ActionType, BotConfig, BotState, Decision, IndicatorSnapshot, ThesisState,
 )
 
 
@@ -86,9 +86,9 @@ def check_add_conditions(
 
     # Soft exposure cap (Section 14.3 — block adds when at/above soft cap)
     etp = config.take_profit.get("exposure_take_profit", {})
-    if etp.get("enabled", False) and state.current_position_shares > 0:
+    if etp.get("enabled", False) and state.current_position_qty > EPSILON:
         starting = config.capital["starting_equity"]
-        current_exposure_pct = (state.current_position_shares * indicators.adj_close) / starting
+        current_exposure_pct = (state.current_position_qty * indicators.adj_close) / starting
         soft = etp.get("soft_exposure_cap_pct", 0.80)
         hard = etp.get("hard_exposure_cap_pct", 1.00)
         if soft <= current_exposure_pct < hard:
@@ -105,7 +105,7 @@ def check_add_conditions(
     new_state = BotState.PYRAMID_LONG if state.state != BotState.PYRAMID_LONG else None
     return Decision(
         action=ActionType.BUY_ADDON,
-        shares=0,
+        qty=0,
         reason="add_conditions_met",
         new_state=new_state,
         indicators=indicators,

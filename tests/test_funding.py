@@ -72,17 +72,17 @@ def test_get_predicted_funding_returns_none_on_error():
 
 
 def test_calc_funding_payment_long_pays_positive_rate():
-    payment = calc_funding_payment(0.0001, position_contracts=2.0, mark_price=50000.0)
+    payment = calc_funding_payment(0.0001, position_qty=2.0, mark_price=50000.0)
     assert payment == -10.0
 
 
 def test_calc_funding_payment_long_receives_negative_rate():
-    payment = calc_funding_payment(-0.0001, position_contracts=2.0, mark_price=50000.0)
+    payment = calc_funding_payment(-0.0001, position_qty=2.0, mark_price=50000.0)
     assert payment == 10.0
 
 
 def test_calc_funding_payment_zero_when_no_position():
-    assert calc_funding_payment(0.0001, position_contracts=0.0, mark_price=50000.0) == 0.0
+    assert calc_funding_payment(0.0001, position_qty=0.0, mark_price=50000.0) == 0.0
 
 
 def test_calc_funding_payment_scales_with_hours():
@@ -123,10 +123,10 @@ def test_funding_pnl_in_backtest_metrics():
             bar_date=date(2026, 1, 1),
             adj_close=100.0,
             open_price=100.0,
-            shares=1,
+            qty=1,
             avg_entry_price=100.0,
             fill_price=None,
-            fill_shares=0,
+            fill_qty=0,
             action=ActionType.NO_ACTION,
             state_name="BASE_LONG",
             in_event_window=False,
@@ -139,10 +139,10 @@ def test_funding_pnl_in_backtest_metrics():
             bar_date=date(2026, 1, 2),
             adj_close=100.0,
             open_price=100.0,
-            shares=1,
+            qty=1,
             avg_entry_price=100.0,
             fill_price=None,
-            fill_shares=0,
+            fill_qty=0,
             action=ActionType.NO_ACTION,
             state_name="BASE_LONG",
             in_event_window=False,
@@ -183,7 +183,7 @@ def test_funding_shown_in_daily_summary_when_nonzero():
     state = make_state(
         state=BotState.BASE_LONG,
         base_lot=make_lot("base", 100.0, 1),
-        current_position_shares=1,
+        current_position_qty=1,
         avg_entry_price=100.0,
         cumulative_funding_pnl=-12.34,
         last_funding_rate=0.0001,

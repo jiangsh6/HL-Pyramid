@@ -20,13 +20,13 @@ def format_summary(
 ) -> str:
     blockers = blockers or []
     equity = config.capital["starting_equity"]
-    base_shares = state.base_lot.shares if state.base_lot else 0
-    addon_shares = sum(l.shares for l in state.addon_lots)
-    notional = state.current_position_shares * indicators.adj_close
+    base_qty = state.base_lot.qty if state.base_lot else 0
+    addon_qty = sum(l.qty for l in state.addon_lots)
+    notional = state.current_position_qty * indicators.adj_close
     exposure_pct = notional / equity if equity > 0 else 0.0
     avg = _safe(state.avg_entry_price)
     unrealized_pct = (
-        (indicators.adj_close - avg) * state.current_position_shares / equity
+        (indicators.adj_close - avg) * state.current_position_qty / equity
         if (avg > 0 and equity > 0) else 0.0
     )
     max_add = config.add.get("max_add_count", 4)
@@ -38,7 +38,7 @@ def format_summary(
         for lot in [state.base_lot] + list(state.addon_lots):
             if lot is None:
                 continue
-            open_risk += max(0.0, (lot.entry_price - state.trailing_stop_price) * lot.shares)
+            open_risk += max(0.0, (lot.entry_price - state.trailing_stop_price) * lot.qty)
     remaining_budget = max(0.0, max_risk - open_risk)
 
     lines = [
@@ -47,8 +47,8 @@ def format_summary(
         f"State:               {state.state.value}",
         f"Protect Profit Mode: {state.protect_profit_mode}",
         f"Close:               {indicators.adj_close:.2f}",
-        f"Position:            {state.current_position_shares} shares  "
-        f"(base: {base_shares} | add-ons: {addon_shares})",
+        f"Position:            {state.current_position_qty} qty  "
+        f"(base: {base_qty} | add-ons: {addon_qty})",
         f"Avg Entry:           {avg:.2f}",
         f"Exposure:            {exposure_pct * 100:.1f}%",
         f"Unrealized PnL:      {unrealized_pct * 100:+.1f}% (account)",

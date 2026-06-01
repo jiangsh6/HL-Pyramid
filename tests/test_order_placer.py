@@ -241,6 +241,7 @@ def test_place_order_exchange_error_response():
         response = place_order(order_req, "0x1234", FAKE_KEY, client)
 
     assert response.status == "err"
+    assert response.error == "Insufficient margin"
 
 
 def test_generate_cloid_converts_to_hl_hex_format():
@@ -250,3 +251,87 @@ def test_generate_cloid_converts_to_hl_hex_format():
     cloid_hex = "0x" + cloid_str.replace("-", "")
     hl_cloid  = Cloid.from_str(cloid_hex)
     assert hl_cloid.to_raw() == cloid_hex
+
+
+def test_place_order_parses_rejection_status_reason():
+    client = _mock_client()
+    mock_resp = _mock_requests_post({
+        "status": "ok",
+        "response": {
+            "type": "order",
+            "data": {"statuses": [{"rejected": {"reason": "perpMarginRejected"}}]},
+        },
+    })
+    order_req = HLOrderRequest(
+        coin="BTC", is_buy=True, sz=0.1, limit_px=50000.0,
+        order_type={"limit": {"tif": "Gtc"}},
+    )
+
+    with patch("src.hl.order_placer._requests.post", return_value=mock_resp):
+        response = place_order(order_req, "0x1234", FAKE_KEY, client)
+
+    assert response.status == "err"
+    assert response.error == "perpMarginRejected"
+
+
+def test_place_order_includes_sanitized_exception_class_on_failure():
+    client = _mock_client()
+    order_req = HLOrderRequest(
+        coin="BTC", is_buy=True, sz=0.1, limit_px=50000.0,
+        order_type={"limit": {"tif": "Gtc"}},
+    )
+
+    with patch("src.hl.auth.build_signer", side_effect=ValueError("bad signer input")):
+        response = place_order(order_req, "0x1234", FAKE_KEY, client)
+
+    assert response.status == "err"
+    assert response.error.startswith("order_placement_failed:ValueError")
+
+
+def test_place_order_formats_btc_price_and_qty_before_sdk_wire(monkeypatch):
+    client = _mock_client()
+    captured = {}
+
+    def fake_order_request_to_order_wire(order_req, asset_index):
+        captured["limit_px"] = order_req["limit_px"]
+        captured["sz"] = order_req["sz"]
+        return {"a": asset_index, "b": True, "p": "72440", "s": "0.00124", "r": False, "t": {"limit": {"tif": "Gtc"}}}
+
+    mock_resp = _mock_requests_post(_ok_order_resp(42))
+    order_req = HLOrderRequest(
+        coin="BTC",
+        is_buy=True,
+        sz=0.0012436435993809418,
+        limit_px=72440.36799999999,
+        order_type={"limit": {"tif": "Gtc"}},
+        sz_decimals=5,
+        min_size=0.001,
+    )
+
+    with patch("hyperliquid.utils.signing.order_request_to_order_wire", side_effect=fake_order_request_to_order_wire), \
+         patch("src.hl.order_placer._requests.post", return_value=mock_resp):
+        response = place_order(order_req, "0xABCD", FAKE_KEY, client)
+
+    assert response.status == "ok"
+    assert response.submitted_sz == pytest.approx(0.00124)
+    assert response.submitted_limit_px == pytest.approx(72440.0)
+    assert captured["limit_px"] == 72440.0
+    assert captured["sz"] == 0.00124
+
+
+def test_place_order_blocks_when_qty_below_min_after_rounding():
+    client = _mock_client()
+    order_req = HLOrderRequest(
+        coin="BTC",
+        is_buy=True,
+        sz=0.0000099,
+        limit_px=72440.36799999999,
+        order_type={"limit": {"tif": "Gtc"}},
+        sz_decimals=5,
+        min_size=0.001,
+    )
+
+    response = place_order(order_req, "0xABCD", FAKE_KEY, client)
+
+    assert response.status == "err"
+    assert response.error == "qty_below_min_size_after_rounding"

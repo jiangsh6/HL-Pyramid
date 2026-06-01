@@ -65,7 +65,7 @@ def generate_charts(
 
     dates       = [r.bar_date for r in records]
     closes      = [r.adj_close for r in records]
-    positions   = [r.shares for r in records]
+    positions   = [r.qty for r in records]
     exposures   = [r.exposure_pct * 100 for r in records]  # percent
 
     # ── 1. Price chart with action markers ────────────────────────────────────
@@ -119,15 +119,15 @@ def generate_charts(
     first_close = closes[0] if closes else 1.0
 
     for rec in records:
-        if rec.fill_shares < 0 and rec.fill_price and rec.avg_entry_price:
-            pnl = (rec.fill_price - rec.avg_entry_price) * abs(rec.fill_shares)
+        if rec.fill_qty < 0 and rec.fill_price and rec.avg_entry_price:
+            pnl = (rec.fill_price - rec.avg_entry_price) * abs(rec.fill_qty)
             running_realized += pnl
         unrealized = 0.0
-        if rec.shares > 0 and rec.avg_entry_price:
-            unrealized = (rec.adj_close - rec.avg_entry_price) * rec.shares
+        if rec.qty > 0 and rec.avg_entry_price:
+            unrealized = (rec.adj_close - rec.avg_entry_price) * rec.qty
         eq_curve.append(equity + running_realized + unrealized)
-        bah_shares = equity / first_close if first_close > 0 else 1
-        bah_curve.append(bah_shares * rec.adj_close)
+        bah_qty = equity / first_close if first_close > 0 else 1
+        bah_curve.append(bah_qty * rec.adj_close)
 
     fig, ax = plt.subplots(figsize=(14, 5))
     ax.plot(dates, eq_curve,  color="steelblue",  label="Strategy equity",      linewidth=1.2)
@@ -180,9 +180,9 @@ def generate_charts(
     fig, ax = plt.subplots(figsize=(14, 4))
     ax.fill_between(dates, positions, 0, color="green", alpha=0.3)
     ax.plot(dates, positions, color="green", linewidth=0.8)
-    ax.set_title(f"{ticker} — Position Size (shares)")
+    ax.set_title(f"{ticker} — Position Size (qty)")
     ax.set_xlabel("Date")
-    ax.set_ylabel("Shares held")
+    ax.set_ylabel("Qty held")
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
     fig.autofmt_xdate()
     fig.tight_layout()

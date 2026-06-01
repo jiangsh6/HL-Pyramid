@@ -172,7 +172,7 @@ def test_protect_profit_mode_set_at_30pct_unrealized_profit():
         symbol="MU",
         state=BotState.BASE_LONG,
         avg_entry_price=1000.0,
-        current_position_shares=10,
+        current_position_qty=10,
     )
     adj_close = 1300.0   # 30% profit
     profit_pct = (adj_close - state.avg_entry_price) / state.avg_entry_price

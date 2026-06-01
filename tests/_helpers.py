@@ -54,12 +54,12 @@ def make_state(state: BotState = BotState.FLAT, **kwargs: Any) -> ThesisState:
 def make_lot(
     lot_id: str,
     entry_price: float,
-    shares: int,
+    qty: int,
     entry_date_str: str = "2026-05-20",
 ) -> LotRecord:
     return LotRecord(
         lot_id=lot_id,
         entry_price=entry_price,
-        shares=shares,
+        qty=qty,
         entry_date=date.fromisoformat(entry_date_str),
     )

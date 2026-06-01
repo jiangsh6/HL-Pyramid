@@ -7,11 +7,18 @@ from pathlib import Path
 
 import yaml
 
+from .env_loader import ensure_runtime_env_loaded
 from .models import BotConfig
+
+DEFAULT_WALLET_ENV = {
+    "testnet": "HL_TESTNET_ACCOUNT_ADDRESS",
+    "mainnet": "HL_MAINNET_ACCOUNT_ADDRESS",
+}
 
 
 def load_config(path: str) -> BotConfig:
     """Load YAML config file and return a validated BotConfig."""
+    ensure_runtime_env_loaded()
     raw = yaml.safe_load(Path(path).read_text())
     mainnet_confirmed = raw.pop("mainnet_confirmed", False)
     if mainnet_confirmed:
@@ -113,6 +120,7 @@ def validate_config(cfg: BotConfig) -> None:
     # HL-specific validation (only when source = "hyperliquid")
     if data_cfg.get("source") == "hyperliquid":
         _validate_hl_block(cfg)
+        _validate_probe_block(cfg)
 
     # Rule 7: event_risk block must NOT contain event_date
     if "event_date" in event:
@@ -166,12 +174,38 @@ def _validate_hl_block(cfg: BotConfig) -> None:
                 "Use hl.network='testnet' for all development phases."
             )
 
+    # wallet_address "ENV" resolves from a network-specific account address
+    # env var so testnet and mainnet credentials stay separated.
+    if hl.get("wallet_address") == "ENV":
+        wallet_env_var = hl.get("wallet_env_var") or DEFAULT_WALLET_ENV.get(
+            network, DEFAULT_WALLET_ENV["testnet"]
+        )
+        env_wallet = os.environ.get(str(wallet_env_var), "").strip()
+        if not env_wallet:
+            raise ValueError(
+                f"hl.wallet_address is 'ENV' but {wallet_env_var} env var "
+                "is not set — refusing to load config without a real wallet"
+            )
+        hl["wallet_address"] = env_wallet
+
     # Required string fields
     for field in ("coin", "bar_interval", "wallet_address"):
         if not hl.get(field):
             raise ValueError(
                 f"hl.{field} is required when data.source='hyperliquid'"
             )
+
+    # collateral_mode controls whether spot USDC counts as perp trading collateral.
+    # Default "unified" matches current HL behaviour where spot USDC backs perp
+    # trading. "clearinghouse_only" preserves the old strict perp-margin model
+    # for debugging or audit scenarios.
+    collateral_mode = hl.get("collateral_mode", "unified")
+    if collateral_mode not in ("unified", "clearinghouse_only"):
+        raise ValueError(
+            f"hl.collateral_mode must be 'unified' or 'clearinghouse_only' "
+            f"(got '{collateral_mode}')"
+        )
+    hl["collateral_mode"] = collateral_mode
 
     # bar_interval must be a recognised cadence when present
     bar_interval = hl.get("bar_interval")
@@ -203,6 +237,68 @@ def _validate_hl_block(cfg: BotConfig) -> None:
             raise ValueError(
                 f"hl.min_size must be > 0 (got {min_sz_f})"
             )
+
+    dust_policy = hl.get("dust_policy") or {}
+    if dust_policy:
+        action = dust_policy.get("action", "halt_and_operator_review")
+        if action != "halt_and_operator_review":
+            raise ValueError(
+                "hl.dust_policy.action currently supports only "
+                "'halt_and_operator_review'"
+            )
+        for field in ("dust_qty_threshold", "dust_notional_threshold_usd"):
+            if field in dust_policy:
+                try:
+                    value = float(dust_policy[field])
+                except (TypeError, ValueError):
+                    raise ValueError(f"hl.dust_policy.{field} must be numeric")
+                if value < 0:
+                    raise ValueError(f"hl.dust_policy.{field} must be >= 0")
+        for field in (
+            "enabled",
+            "allow_reduce_only_dust_close",
+            "allow_round_up_to_min_size_for_reduce_only",
+        ):
+            if field in dust_policy and not isinstance(dust_policy[field], bool):
+                raise ValueError(f"hl.dust_policy.{field} must be boolean")
+    hl["dust_policy"] = {
+        "enabled": bool(dust_policy.get("enabled", True)),
+        "dust_qty_threshold": float(
+            dust_policy.get("dust_qty_threshold", hl.get("min_size", 0.0) or 0.0)
+        ),
+        "dust_notional_threshold_usd": float(dust_policy.get("dust_notional_threshold_usd", 10.0)),
+        "action": dust_policy.get("action", "halt_and_operator_review"),
+        "allow_reduce_only_dust_close": bool(dust_policy.get("allow_reduce_only_dust_close", False)),
+        "allow_round_up_to_min_size_for_reduce_only": bool(
+            dust_policy.get("allow_round_up_to_min_size_for_reduce_only", False)
+        ),
+    }
+
+
+def _validate_probe_block(cfg: BotConfig) -> None:
+    probe = cfg.probe or {}
+    if not probe:
+        return
+    numeric_fields = {
+        "default_base_qty": 0.0,
+        "default_addon_qty": 0.0,
+        "runner_pct": 0.0,
+        "min_probe_qty_multiplier": 1.0,
+    }
+    for field, lower_bound in numeric_fields.items():
+        if field not in probe:
+            continue
+        try:
+            value = float(probe[field])
+        except (TypeError, ValueError):
+            raise ValueError(f"probe.{field} must be numeric")
+        if value <= lower_bound:
+            comparator = ">" if lower_bound == 0.0 else ">="
+            raise ValueError(f"probe.{field} must be {comparator} {lower_bound}")
+
+    runner_pct = probe.get("runner_pct")
+    if runner_pct is not None and not (0.0 < float(runner_pct) < 1.0):
+        raise ValueError("probe.runner_pct must be in range (0.0, 1.0)")
 
 
 def config_snapshot_hash(cfg: BotConfig) -> str:

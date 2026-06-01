@@ -31,7 +31,7 @@ from src.data.indicators import calc_indicators
 from src.execution.paper_broker import execute as paper_execute
 from src.reporting.daily_summary import format_summary
 from src.reporting.logger import log_cycle
-from src.reporting.state_writer import apply_fill, read_state, write_state
+from src.reporting.state_writer import apply_fill, load_state_or_halt, write_state
 
 
 def main(argv=None) -> int:
@@ -46,10 +46,12 @@ def main(argv=None) -> int:
     run_dir = cfg.logging["run_dir"]
     state_path = Path(run_dir) / "state.json"
 
-    if state_path.exists():
-        state = read_state(str(state_path))
-    else:
-        state = ThesisState(symbol=cfg.symbol["ticker"])
+    state, terminal_state_load = load_state_or_halt(
+        str(state_path), cfg.symbol["ticker"]
+    )
+    if terminal_state_load:
+        print(f"Startup halted: {state.halt_reason}")
+        return 1
 
     df = pd.read_csv(args.data_csv, parse_dates=["date"]).set_index("date")
     ind = calc_indicators(df, cfg)

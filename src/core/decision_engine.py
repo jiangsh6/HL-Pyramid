@@ -5,7 +5,7 @@ import math
 from typing import TYPE_CHECKING, List, Optional
 
 from src.core.models import (
-    ActionType, BotConfig, BotState, Decision, IndicatorSnapshot, ThesisState,
+    EPSILON, ActionType, BotConfig, BotState, Decision, IndicatorSnapshot, ThesisState,
 )
 from src.strategy.entry import check_entry
 from src.strategy.add import check_add_conditions
@@ -14,6 +14,7 @@ from src.strategy.take_profit import check_take_profit
 from src.strategy.stops import update_trailing_stop, check_stop_triggers
 from src.strategy.event_risk import update_event_risk_mode, check_event_derisking
 from src.strategy.sizing import calc_entry_size, calc_addon_size
+from src.reporting.state_writer import mark_to_market_state, update_dust_state
 
 if TYPE_CHECKING:
     from src.hl.account import HLAccountSnapshot
@@ -40,7 +41,7 @@ def _evaluate_protect_profit_mode(
         state.protect_profit_mode = True
         return
     avg = state.avg_entry_price
-    if avg and avg > 0 and state.current_position_shares > 0:
+    if avg and avg > 0 and state.current_position_qty > EPSILON:
         unrealized_pct = (indicators.adj_close - avg) / avg
         levels = config.take_profit.get("layered_profit", {}).get("levels", [])
         if levels:
@@ -53,7 +54,7 @@ def _no_action(reason: str, blockers: Optional[List[str]] = None,
                indicators: Optional[IndicatorSnapshot] = None) -> Decision:
     return Decision(
         action=ActionType.NO_ACTION,
-        shares=0,
+        qty=0,
         reason=reason,
         blockers=blockers or [],
         indicators=indicators,
@@ -70,9 +71,14 @@ def run(
     Section 8.1 — 13-step decision cycle.
     Mutates state for: trailing stop update, event-risk mode transitions,
     days_to_event, protect_profit_mode, tp_levels_triggered, target_price_tp_triggered,
-    peak_unrealized_pnl_pct, runner_target_shares, runner_mode_active.
+    peak_unrealized_pnl_pct, runner_target_qty, runner_mode_active.
     Returns a Decision; the caller (Phase 3) executes and applies the Fill.
     """
+    # Step 1: daily_pnl reset on new calendar day (audit H1)
+    if state.last_updated is not None:
+        if state.last_updated.date() < indicators.date:
+            state.daily_pnl = 0.0
+
     # Step 2: indicator validation (Step 1 handled outside)
     if _has_nan(indicators):
         state.state = BotState.HALTED
@@ -85,11 +91,13 @@ def run(
             indicators=indicators,
         )
 
-    # Step 3: state consistency (paper mode)
-    expected = (state.base_lot.shares if state.base_lot is not None else 0) + sum(
-        l.shares for l in state.addon_lots
+    # Step 3: state consistency.
+    expected_qty = (
+        (state.base_lot.qty if state.base_lot is not None else 0.0)
+        + sum(l.qty for l in state.addon_lots)
     )
-    if state.current_position_shares != expected:
+    qty_ok = abs(expected_qty - state.current_position_qty) < EPSILON
+    if not qty_ok:
         state.state = BotState.HALTED
         state.halted = True
         state.halt_reason = "state_consistency_error"
@@ -97,6 +105,18 @@ def run(
             action=ActionType.HALT,
             reason="state_consistency_error",
             new_state=BotState.HALTED,
+            indicators=indicators,
+        )
+
+    # Refresh mark-to-market PnL before max-loss checks so open losses cannot
+    # be hidden behind stale thesis_pnl from an earlier fill/funding update.
+    mark_to_market_state(state, indicators.close or indicators.adj_close)
+    if update_dust_state(state, indicators.close or indicators.adj_close, config):
+        return Decision(
+            action=ActionType.HALT if state.halted else ActionType.NO_ACTION,
+            reason=state.halt_reason or state.dust_reason or "dust_position",
+            blockers=[state.dust_reason or "dust_position"],
+            new_state=BotState.HALTED if state.halted else state.state,
             indicators=indicators,
         )
 
@@ -117,7 +137,7 @@ def run(
         if reconcile_result.status == "warn":
             _log.warning(
                 "Reconcile warn: %s (drift=%.6f)",
-                reconcile_result.reason, reconcile_result.drift_contracts,
+                reconcile_result.reason, reconcile_result.drift_qty,
             )
         # Update live metadata from HL position (observes only)
         coin = config.hl.get("coin", "") if config.hl else ""
@@ -132,12 +152,12 @@ def run(
     update_event_risk_mode(state, indicators, config)
 
     # Step 6a: hard stop
-    if state.current_position_shares > 0:
+    if state.current_position_qty > EPSILON:
         trig = check_stop_triggers(state, indicators, config)
         if trig == "hard_stop":
             return Decision(
                 action=ActionType.SELL_STOP,
-                shares=state.current_position_shares,
+                qty=state.current_position_qty,
                 reason="hard_stop_triggered",
                 new_state=BotState.EXITED,
                 indicators=indicators,
@@ -149,10 +169,10 @@ def run(
     if state.thesis_pnl / starting <= -max_thesis_loss:
         state.halted = True
         state.halt_reason = "max_thesis_loss"
-        if state.current_position_shares > 0:
+        if state.current_position_qty > EPSILON:
             return Decision(
                 action=ActionType.EXIT_ALL,
-                shares=state.current_position_shares,
+                qty=state.current_position_qty,
                 reason="max_thesis_loss",
                 new_state=BotState.HALTED,
                 indicators=indicators,
@@ -164,28 +184,28 @@ def run(
             indicators=indicators,
         )
 
-    # Step 6c: max daily loss — non-terminal, blocks new orders
+    # Step 6c: max daily loss — non-terminal, blocks new orders (audit H1)
     blockers: List[str] = []
     max_daily_loss = config.risk["max_loss"]["max_daily_loss_pct_of_equity"]
     daily_loss_blocks = False
-    if state.realized_pnl / starting <= -max_daily_loss:
+    if state.daily_pnl / starting <= -max_daily_loss:
         daily_loss_blocks = True
         blockers.append("daily_loss_limit")
 
     # Step 7: trailing stop trigger
-    if state.current_position_shares > 0:
+    if state.current_position_qty > EPSILON:
         trig = check_stop_triggers(state, indicators, config)
         if trig == "trailing_stop":
             return Decision(
                 action=ActionType.SELL_TRAILING_STOP,
-                shares=state.current_position_shares,
+                qty=state.current_position_qty,
                 reason="trailing_stop_triggered",
                 new_state=BotState.EXITED,
                 indicators=indicators,
             )
 
     # Step 8: reduce rules
-    if state.current_position_shares > 0:
+    if state.current_position_qty > EPSILON:
         d = check_addon_reduce(state, indicators, config)
         if d is not None:
             return d
@@ -193,14 +213,24 @@ def run(
         if d is not None:
             return d
 
+    # Audit H2: REDUCE_MODE auto-transitions back to BASE_LONG once add-ons
+    # are cleared and no fresh reduce trigger is active. Without this, the
+    # bot is permanently stuck in REDUCE_MODE and check_add_conditions will
+    # never allow new add-ons again.
+    if (state.state == BotState.REDUCE_MODE
+            and len(state.addon_lots) == 0
+            and check_addon_reduce(state, indicators, config) is None
+            and check_base_reduce(state, indicators, config) is None):
+        state.state = BotState.BASE_LONG
+
     # Step 9: event de-risking
-    if state.current_position_shares > 0:
+    if state.current_position_qty > EPSILON:
         d = check_event_derisking(state, indicators, config)
         if d is not None:
             return d
 
     # Step 10: take profit
-    if state.current_position_shares > 0:
+    if state.current_position_qty > EPSILON:
         d = check_take_profit(state, indicators, config)
         if d is not None:
             return d
@@ -213,11 +243,11 @@ def run(
         d = check_entry(state, indicators, config)
         if d is not None:
             exposure_pct = _entry_exposure_pct(d.reason, config)
-            shares, blocker = calc_entry_size(
+            qty, blocker = calc_entry_size(
                 state, config, indicators.adj_close, indicators.atr14, exposure_pct
             )
             if blocker is None:
-                d.shares = shares
+                d.qty = qty
                 return d
             blockers.append(blocker)
 
@@ -227,9 +257,9 @@ def run(
             and not daily_loss_blocks):
         d = check_add_conditions(state, indicators, config)
         if d is not None and d.action == ActionType.BUY_ADDON:
-            shares, blocker = calc_addon_size(state, config, indicators.adj_close)
+            qty, blocker = calc_addon_size(state, config, indicators.adj_close)
             if blocker is None:
-                d.shares = shares
+                d.qty = qty
                 return d
             blockers.append(blocker)
         elif d is not None and d.blockers:

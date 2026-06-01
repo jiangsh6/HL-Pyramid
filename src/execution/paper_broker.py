@@ -16,6 +16,7 @@ from typing import Optional
 from src.core.models import (
     ActionType, BotConfig, Decision, Fill, ThesisState,
 )
+from src.execution.utils import compute_realized_pnl_lifo
 
 
 _BUY_ACTIONS = {
@@ -51,7 +52,7 @@ def execute(
         realized_pnl = 0.0
     elif decision.action in _SELL_ACTIONS:
         fill_price = fill_ref_price * (1 - slippage)
-        realized_pnl = _compute_realized_pnl(state, decision.shares, fill_price)
+        realized_pnl = compute_realized_pnl_lifo(state, decision.qty, fill_price)
     else:
         # NO_ACTION / HALT
         fill_price = fill_ref_price
@@ -59,7 +60,7 @@ def execute(
 
     return Fill(
         action=decision.action,
-        shares=decision.shares,
+        qty=decision.qty,
         fill_price=fill_price,
         slippage_bps=slippage * 10000.0,
         realized_pnl=realized_pnl,
@@ -69,21 +70,6 @@ def execute(
 
 
 def _compute_realized_pnl(
-    state: ThesisState, shares_to_sell: int, fill_price: float
+    state: ThesisState, qty_to_sell: float, fill_price: float
 ) -> float:
-    """
-    LIFO cost basis: latest addon lots first, then base if needed.
-    Read-only — does not mutate state.
-    """
-    remaining = shares_to_sell
-    realized = 0.0
-    for lot in reversed(state.addon_lots):
-        if remaining <= 0:
-            break
-        sell = min(lot.shares, remaining)
-        realized += (fill_price - lot.entry_price) * sell
-        remaining -= sell
-    if remaining > 0 and state.base_lot is not None:
-        sell = min(state.base_lot.shares, remaining)
-        realized += (fill_price - state.base_lot.entry_price) * sell
-    return realized
+    return compute_realized_pnl_lifo(state, float(qty_to_sell), fill_price)

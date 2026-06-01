@@ -10,6 +10,8 @@ All 4 named tests:
 from __future__ import annotations
 
 from datetime import date
+import os
+from unittest.mock import patch
 
 import pytest
 
@@ -21,12 +23,14 @@ from tests._helpers import base_config, make_indicators, make_state
 
 
 HL_CONFIG_PATH = "config/btc_long_thesis.yaml"
+TESTNET_WALLET = "0x1111111111111111111111111111111111111111"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _hl_config():
-    return load_config(HL_CONFIG_PATH)
+    with patch.dict(os.environ, {"HL_TESTNET_ACCOUNT_ADDRESS": TESTNET_WALLET}, clear=False):
+        return load_config(HL_CONFIG_PATH)
 
 
 def _make_hl_snapshot(
@@ -38,7 +42,7 @@ def _make_hl_snapshot(
     if contracts > 0.0:
         positions.append(HLPosition(
             coin=coin,
-            contracts=contracts,
+            qty=contracts,
             entry_price=50000.0,
             mark_price=50000.0,
             unrealized_pnl=0.0,
@@ -59,14 +63,14 @@ def _make_hl_state(contracts: float) -> ThesisState:
         lot = LotRecord(
             lot_id="base",
             entry_price=50000.0,
-            contracts=contracts,
+            qty=contracts,
             entry_date=date(2026, 1, 1),
         )
         return ThesisState(
             symbol="BTC",
             state=BotState.BASE_LONG,
             base_lot=lot,
-            current_position_contracts=contracts,
+            current_position_qty=contracts,
         )
     return ThesisState(symbol="BTC", state=BotState.FLAT)
 
@@ -132,7 +136,7 @@ def test_decision_engine_skips_hl_reconcile_in_paper_mode():
         positions=[
             HLPosition(
                 coin="MU",
-                contracts=100.0,   # state has 0 → would be liquidation_detected
+                qty=100.0,   # state has 0 → would be liquidation_detected
                 entry_price=100.0,
                 mark_price=100.0,
                 unrealized_pnl=0.0,

@@ -21,7 +21,7 @@ class Order:
     """Order record — paper mode fields plus HL Phase 4 exchange-tracking fields."""
     action:      ActionType
     symbol:      str
-    shares:      int
+    qty:        float
     order_type:  str
     limit_price: Optional[float]
     status:      str
@@ -30,7 +30,7 @@ class Order:
     cloid:             Optional[str]   = None
     hl_oid:            Optional[int]   = None
     exchange_status:   str             = "pending"
-    filled_contracts:  float           = 0.0
+    filled_qty:        float           = 0.0
     avg_fill_px:       Optional[float] = None
 
 
@@ -40,7 +40,7 @@ def build_order(decision: Decision, symbol: str,
     return Order(
         action=decision.action,
         symbol=symbol,
-        shares=decision.shares,
+        qty=decision.qty,
         order_type=order_type,
         limit_price=limit_price,
         status="pending",
@@ -57,7 +57,7 @@ def mark_filled_hl(order: Order, response: "HLOrderResponse") -> Order:
     """Apply a Hyperliquid fill response to an Order record."""
     order.exchange_status   = "filled"
     order.hl_oid            = response.hl_oid
-    order.filled_contracts  = response.filled_sz
+    order.filled_qty        = response.filled_sz
     order.avg_fill_px       = response.avg_fill_px
     return order
 

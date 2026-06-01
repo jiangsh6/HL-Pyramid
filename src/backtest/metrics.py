@@ -19,10 +19,10 @@ class BacktestRecord:
     bar_date: Any                   # date
     adj_close: float
     open_price: float               # raw open (used for fill)
-    shares: int                     # position shares at END of this bar
+    qty: float                   # position qty at END of this bar
     avg_entry_price: Optional[float]
     fill_price: Optional[float]     # fill price if an order executed this bar
-    fill_shares: int                # shares transacted (positive = buy, negative = sell)
+    fill_qty: float              # qty transacted (positive = buy, negative = sell)
     action: ActionType
     state_name: str
     in_event_window: bool
@@ -90,7 +90,7 @@ def compute_metrics(
         # PnL from fills (sells only).
         # Use fill_realized_pnl captured from Fill.realized_pnl at fill time.
         # This avoids the post-apply_fill avg_entry_price=None bug on full exits.
-        if rec.fill_shares < 0 and rec.fill_price is not None:
+        if rec.fill_qty < 0 and rec.fill_price is not None:
             pnl = rec.fill_realized_pnl
             realized_pnl += pnl
             if rec.in_event_window:
@@ -105,13 +105,13 @@ def compute_metrics(
         max_exposure = max(max_exposure, rec.exposure_pct)
 
         # In-market tracking
-        if rec.shares > 0:
+        if rec.qty > 0:
             bars_in_market += 1
 
         # Equity curve / drawdown
         current_equity = equity + realized_pnl + funding_pnl
-        if rec.shares > 0 and rec.avg_entry_price:
-            unrealized = (rec.adj_close - rec.avg_entry_price) * rec.shares
+        if rec.qty > 0 and rec.avg_entry_price:
+            unrealized = (rec.adj_close - rec.avg_entry_price) * rec.qty
             current_equity += unrealized
 
         peak_equity = max(peak_equity, current_equity)
@@ -119,8 +119,8 @@ def compute_metrics(
         max_drawdown = max(max_drawdown, dd)
 
         # Intraday drawdown approximation: from entry price to low (use open as proxy)
-        if rec.shares > 0 and rec.avg_entry_price and rec.open_price < rec.adj_close:
-            intra_loss = (rec.avg_entry_price - rec.open_price) * rec.shares
+        if rec.qty > 0 and rec.avg_entry_price and rec.open_price < rec.adj_close:
+            intra_loss = (rec.avg_entry_price - rec.open_price) * rec.qty
             if intra_loss > 0:
                 intra_dd = intra_loss / equity
                 max_intraday_drawdown = max(max_intraday_drawdown, intra_dd)

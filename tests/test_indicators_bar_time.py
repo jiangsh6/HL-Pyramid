@@ -9,6 +9,8 @@ All 3 named tests:
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import os
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -39,7 +41,8 @@ def _minimal_df(n: int = 60, index: pd.Index | None = None) -> pd.DataFrame:
 
 
 def _config():
-    return load_config("config/btc_long_thesis.yaml")
+    with patch.dict(os.environ, {"HL_TESTNET_ACCOUNT_ADDRESS": "0x1111111111111111111111111111111111111111"}, clear=False):
+        return load_config("config/btc_long_thesis.yaml")
 
 
 # ── Named tests ───────────────────────────────────────────────────────────────
