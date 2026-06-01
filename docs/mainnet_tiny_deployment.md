@@ -112,13 +112,15 @@ python scripts/cancel_hl_order.py \
   --config config/btc_long_thesis_mainnet.yaml \
   --coin BTC \
   --oid <ORDER_ID> \
+  --mainnet \
   --confirm \
   --one-cycle
 ```
 
-Important: as of this runbook, the cancel utility is intentionally testnet-only
-and will refuse non-testnet configs. For mainnet, cancel from the Hyperliquid UI
-or add a separately reviewed mainnet-cancel guard before relying on this script.
+Mainnet cancel is allowed only as an emergency recovery command when all of
+these are true: the config is mainnet, `HL_ALLOW_MAINNET=true`, the operator
+passes `--mainnet`, `--confirm`, and `--one-cycle`, and an exact `oid` is
+provided. The script cancels only that OID.
 
 Flatten position:
 
@@ -126,13 +128,16 @@ Flatten position:
 python scripts/flatten_hl_position.py \
   --config config/btc_long_thesis_mainnet.yaml \
   --coin BTC \
+  --mainnet \
   --confirm \
   --one-cycle
 ```
 
-Important: as of this runbook, the flatten utility is testnet-focused and will
-refuse non-testnet configs. For mainnet, use Hyperliquid UI unless a separately
-reviewed mainnet-flatten guard is implemented.
+Mainnet flatten is allowed only as an emergency recovery command when all of
+these are true: the config is mainnet, `HL_ALLOW_MAINNET=true`, the operator
+passes `--mainnet`, `--confirm`, and `--one-cycle`, no exchange orders are
+open, and BTC quantity is aligned. The script submits reduce-only only and uses
+conservative cleanup pricing.
 
 ## Required Telegram Alerts
 

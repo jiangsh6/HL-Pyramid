@@ -1,7 +1,7 @@
 """One-cycle, reduce-only Hyperliquid position cleanup probe.
 
 This script is intentionally narrow:
-  - testnet only
+  - testnet by default; mainnet only with explicit recovery gates
   - one coin only
   - reduce-only SELL only
   - no strategy entry/add logic
@@ -36,10 +36,11 @@ from src.core.models import (
 from src.execution.hl_broker import execute_hl
 from src.execution.reconciler import reconcile_state_with_exchange
 from src.hl.account import get_account_snapshot, get_recent_user_fills
-from src.hl.auth import get_private_key
+from src.hl.auth import get_private_key, validate_mainnet_intent
 from src.hl.client import HyperliquidClient
 from src.hl.precision import decimal_to_plain_string, format_hl_qty
 from src.hl.pricing import compute_oracle_safe_exit_price
+from src.notifications.telegram import TelegramNotifier, alert_toggle_enabled, notify_event
 from src.reporting.logger import log_cycle
 from src.reporting.state_writer import (
     apply_fill,
@@ -54,6 +55,47 @@ def _mask(addr: str) -> str:
     if not addr or len(addr) < 10:
         return addr
     return addr[:6] + "..." + addr[-3:]
+
+
+
+def _validate_recovery_network_intent(config, network: str, cli_mainnet: bool) -> bool:
+    mode = str(config.bot.get("mode", ""))
+    network = str(network)
+    if mode == "mainnet" or network == "mainnet":
+        if mode != "mainnet" or network != "mainnet":
+            raise ValueError("mainnet recovery requires config mode and hl.network to both be mainnet")
+        validate_mainnet_intent(config, cli_has_mainnet_flag=cli_mainnet)
+        return True
+    if cli_mainnet:
+        raise ValueError("--mainnet was passed for a non-mainnet config")
+    if mode != "testnet" or network != "testnet":
+        raise ValueError("refusing non-testnet recovery config")
+    return False
+
+
+def _notify_exit_semantic(config, state_before: str, state, order_result, exchange_qty: float) -> None:
+    if not alert_toggle_enabled(config.notifications or {}, "trade_alerts_enabled"):
+        return
+    notifier = TelegramNotifier.from_config(config.notifications or {})
+    event_name = "position_closed" if state.current_position_qty <= EPSILON else "partial_fill_detected"
+    event = {
+        "type": "semantic",
+        "event": event_name,
+        "run_id": str(config.bot.get("run_id") or "-"),
+        "network": str((config.hl or {}).get("network", config.bot.get("mode", "-"))),
+        "state_before": state_before,
+        "state_after": state.state.value,
+        "order_id": order_result.oid,
+        "qty": order_result.submitted_qty,
+        "fill_qty": order_result.filled_qty,
+        "price": order_result.avg_fill_px or order_result.limit_px,
+        "exchange_position_qty": exchange_qty,
+        "local_position_qty": state.current_position_qty,
+    }
+    try:
+        notify_event(notifier, event)
+    except Exception:  # noqa: BLE001
+        return
 
 
 def _synthetic_indicators(mark_price: float) -> IndicatorSnapshot:
@@ -236,7 +278,7 @@ def can_recover_ioc_flatten_halt(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="One-cycle reduce-only HL testnet flatten probe")
+    parser = argparse.ArgumentParser(description="One-cycle reduce-only HL recovery flatten probe")
     parser.add_argument("--config", required=True)
     parser.add_argument("--coin", required=True)
     parser.add_argument("--confirm", action="store_true")
@@ -264,6 +306,7 @@ def main() -> int:
     parser.add_argument("--time-in-force", choices=("gtc", "ioc"), default=None)
     parser.add_argument("--exit-aggressiveness-bps", type=float, default=None)
     parser.add_argument("--max-oracle-deviation-bps", type=float, default=None)
+    parser.add_argument("--mainnet", action="store_true")
     args = parser.parse_args()
 
     if not args.confirm or not args.one_cycle:
@@ -273,10 +316,11 @@ def main() -> int:
     config = load_config(args.config)
     hl_cfg = config.hl or {}
     network = hl_cfg.get("network", "testnet")
-    mode = config.bot.get("mode")
     coin = hl_cfg.get("coin", config.symbol.get("ticker", args.coin))
-    if mode != "testnet" or network != "testnet":
-        print("ERROR: refusing non-testnet config")
+    try:
+        mainnet_used = _validate_recovery_network_intent(config, network, args.mainnet)
+    except ValueError as exc:
+        print("ERROR: " + str(exc))
         return 2
     if args.coin != coin:
         print(f"ERROR: requested coin {args.coin} does not match config coin {coin}")
@@ -289,8 +333,8 @@ def main() -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     state_path = run_dir / "state.json"
 
-    print("network=testnet")
-    print("mainnet_used=False")
+    print("network=" + str(network))
+    print("mainnet_used=" + str(mainnet_used))
     print("account_address=" + _mask(wallet))
     print("private_key_loaded=True")
 
@@ -381,6 +425,10 @@ def main() -> int:
         )
         print("STOPPED_BEFORE_EXIT: reconciliation_halted")
         print("halt_reason=" + str(state.halt_reason))
+        return 1
+
+    if mainnet_used and abs(state.current_position_qty - exchange_qty) > EPSILON:
+        print("STOPPED_BEFORE_EXIT: mainnet_position_mismatch")
         return 1
 
     sz_decimals = int(hl_cfg.get("sz_decimals", state.sz_decimals or 0) or 0)
@@ -569,6 +617,9 @@ def main() -> int:
     )
     post_position = next((p for p in post.positions if p.coin == coin), None)
     post_qty = post_position.qty if post_position is not None else 0.0
+
+    if fill is not None and order_result.filled_qty > EPSILON:
+        _notify_exit_semantic(config, state_before, state, order_result, post_qty)
 
     print("order_status=" + order_result.status.value)
     print("oid=" + str(order_result.oid))

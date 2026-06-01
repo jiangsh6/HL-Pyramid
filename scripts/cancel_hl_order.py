@@ -1,7 +1,7 @@
 """One-cycle, exact-oid Hyperliquid order cancel/reconcile utility.
 
-This script is deliberately narrow for testnet cleanup:
-  - testnet only
+This script is deliberately narrow for operator cleanup:
+  - testnet by default; mainnet only with explicit recovery gates
   - exact coin + oid only
   - no new orders
   - no recurring loop
@@ -38,7 +38,7 @@ from src.execution.operator_recovery import (
 )
 from src.execution.reconciler import reconcile_state_with_exchange
 from src.hl.account import get_account_snapshot, get_recent_user_fills
-from src.hl.auth import get_private_key
+from src.hl.auth import get_private_key, validate_mainnet_intent
 from src.hl.client import HyperliquidClient
 from src.hl.order_placer import cancel_order
 from src.notifications.telegram import TelegramNotifier, alert_toggle_enabled, notify_event
@@ -143,13 +143,29 @@ def _notify_order_cancelled(config, state, order_result, exchange_qty) -> None: 
         return
 
 
+def _validate_recovery_network_intent(config, network: str, cli_mainnet: bool) -> bool:
+    mode = str(config.bot.get("mode", ""))
+    network = str(network)
+    if mode == "mainnet" or network == "mainnet":
+        if mode != "mainnet" or network != "mainnet":
+            raise ValueError("mainnet recovery requires config mode and hl.network to both be mainnet")
+        validate_mainnet_intent(config, cli_has_mainnet_flag=cli_mainnet)
+        return True
+    if cli_mainnet:
+        raise ValueError("--mainnet was passed for a non-mainnet config")
+    if mode != "testnet" or network != "testnet":
+        raise ValueError("refusing non-testnet recovery config")
+    return False
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Cancel or reconcile one exact HL testnet order")
+    parser = argparse.ArgumentParser(description="Cancel or reconcile one exact HL recovery order")
     parser.add_argument("--config", required=True)
     parser.add_argument("--coin", required=True)
     parser.add_argument("--oid", required=True, type=int)
     parser.add_argument("--confirm", action="store_true")
     parser.add_argument("--one-cycle", action="store_true")
+    parser.add_argument("--mainnet", action="store_true")
     args = parser.parse_args()
 
     if not args.confirm or not args.one_cycle:
@@ -161,8 +177,10 @@ def main() -> int:
     network = hl_cfg.get("network", "testnet")
     mode = config.bot.get("mode")
     coin = hl_cfg.get("coin", config.symbol.get("ticker", args.coin))
-    if mode != "testnet" or network != "testnet":
-        print("ERROR: refusing non-testnet config")
+    try:
+        mainnet_used = _validate_recovery_network_intent(config, network, args.mainnet)
+    except ValueError as exc:
+        print("ERROR: " + str(exc))
         return 2
     if args.coin != coin:
         print(f"ERROR: requested coin {args.coin} does not match config coin {coin}")
@@ -174,8 +192,8 @@ def main() -> int:
     run_dir = Path(config.logging.get("run_dir", "reports/btc_hl_testnet"))
     state_path = run_dir / "state.json"
 
-    print("network=testnet")
-    print("mainnet_used=False")
+    print("network=" + str(network))
+    print("mainnet_used=" + str(mainnet_used))
     print("account_address=" + _mask(wallet))
     print("private_key_loaded=True")
 

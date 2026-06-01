@@ -29,3 +29,8 @@ Expected:
 
 Do not run mainnet unless the testnet runbook is complete, Telegram alerts work,
 and the operator explicitly approves the mainnet command.
+
+Mainnet emergency recovery scripts are intentionally gated. `cancel_hl_order.py`
+and `flatten_hl_position.py` require a mainnet config, `HL_ALLOW_MAINNET=true`,
+`--mainnet`, `--confirm`, and `--one-cycle`; cancel also requires an exact OID,
+and flatten refuses if exchange orders are open or BTC quantity is not aligned.
