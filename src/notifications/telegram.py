@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
@@ -37,6 +38,8 @@ class TelegramNotifier:
     token: Optional[str] = None
     chat_id: Optional[str] = None
     timeout_seconds: float = 5.0
+    retry_count: int = 0
+    retry_delay_seconds: float = 0.0
     logger: logging.Logger = _log
 
     @classmethod
@@ -51,12 +54,34 @@ class TelegramNotifier:
         token = os.environ.get("TELEGRAM_BOT_TOKEN")
         chat_id = os.environ.get("TELEGRAM_CHAT_ID")
         timeout = float(config.get("telegram_timeout_seconds", 5.0) or 5.0)
+        retry_count = max(0, int(config.get("retry_count", 0) or 0))
+        retry_delay = max(0.0, float(config.get("retry_delay_seconds", 0.0) or 0.0))
         if not configured:
-            return cls(enabled=False, timeout_seconds=timeout, logger=log)
+            return cls(
+                enabled=False,
+                timeout_seconds=timeout,
+                retry_count=retry_count,
+                retry_delay_seconds=retry_delay,
+                logger=log,
+            )
         if not token or not chat_id:
             log.info("alert_disabled=true reason=missing_telegram_env")
-            return cls(enabled=False, timeout_seconds=timeout, logger=log)
-        return cls(enabled=True, token=token, chat_id=chat_id, timeout_seconds=timeout, logger=log)
+            return cls(
+                enabled=False,
+                timeout_seconds=timeout,
+                retry_count=retry_count,
+                retry_delay_seconds=retry_delay,
+                logger=log,
+            )
+        return cls(
+            enabled=True,
+            token=token,
+            chat_id=chat_id,
+            timeout_seconds=timeout,
+            retry_count=retry_count,
+            retry_delay_seconds=retry_delay,
+            logger=log,
+        )
 
     def send_message(self, text: str) -> bool:
         if not self.enabled:
@@ -64,24 +89,30 @@ class TelegramNotifier:
         if not self.token or not self.chat_id:
             self.logger.info("alert_disabled=true reason=missing_telegram_env")
             return False
-        try:
-            response = requests.post(
-                f"https://api.telegram.org/bot{self.token}/sendMessage",
-                json={
-                    "chat_id": self.chat_id,
-                    "text": text,
-                    "disable_web_page_preview": True,
-                },
-                timeout=self.timeout_seconds,
-            )
-            response.raise_for_status()
-            return True
-        except Exception as exc:  # noqa: BLE001
-            self.logger.warning(
-                "telegram_send_failed=true error_type=%s",
-                type(exc).__name__,
-            )
-            return False
+        max_attempts = self.retry_count + 1
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = requests.post(
+                    f"https://api.telegram.org/bot{self.token}/sendMessage",
+                    json={
+                        "chat_id": self.chat_id,
+                        "text": text,
+                        "disable_web_page_preview": True,
+                    },
+                    timeout=self.timeout_seconds,
+                )
+                response.raise_for_status()
+                return True
+            except Exception as exc:  # noqa: BLE001
+                self.logger.warning(
+                    "telegram_send_failed=true attempt=%s max_attempts=%s error_type=%s",
+                    attempt,
+                    max_attempts,
+                    type(exc).__name__,
+                )
+                if attempt < max_attempts and self.retry_delay_seconds > 0:
+                    time.sleep(self.retry_delay_seconds)
+        return False
 
 
 def format_event(event: Mapping[str, Any]) -> str:
