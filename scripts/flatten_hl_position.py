@@ -156,6 +156,7 @@ def _log_cleanup_cycle(
 
 
 RECOVERABLE_CLEANUP_EXIT_HALT_PREFIX = "cleanup_exit_failed:Price too far from oracle"
+TARGET_RUNNER_VALIDATION_HALT_REASON = "exit_order_canceled_position_still_open"
 
 
 def can_recover_cleanup_exit_halt(
@@ -178,6 +179,30 @@ def can_recover_cleanup_exit_halt(
     )
 
 
+def can_recover_target_runner_validation_halt(
+    *,
+    state,
+    network: str,
+    recover_flag: bool,
+    confirmed: bool,
+    open_orders_count: int,
+    exchange_qty: float,
+) -> bool:
+    return (
+        network == "testnet"
+        and recover_flag
+        and confirmed
+        and state.state == BotState.HALTED
+        and state.halted
+        and state.halt_reason == TARGET_RUNNER_VALIDATION_HALT_REASON
+        and state.pending_order is None
+        and open_orders_count == 0
+        and exchange_qty > EPSILON
+        and state.current_position_qty > EPSILON
+        and abs(state.current_position_qty - exchange_qty) <= EPSILON
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="One-cycle reduce-only HL testnet flatten probe")
     parser.add_argument("--config", required=True)
@@ -189,6 +214,14 @@ def main() -> int:
         action="store_true",
         help="Allow retry only from a recoverable oracle-price cleanup exit HALT.",
     )
+    parser.add_argument(
+        "--recover-from-target-runner-validation-halt",
+        action="store_true",
+        help="Allow IOC flatten only from the Bundle 2 target-runner validation HALT.",
+    )
+    parser.add_argument("--time-in-force", choices=("gtc", "ioc"), default=None)
+    parser.add_argument("--exit-aggressiveness-bps", type=float, default=None)
+    parser.add_argument("--max-oracle-deviation-bps", type=float, default=None)
     args = parser.parse_args()
 
     if not args.confirm or not args.one_cycle:
@@ -235,20 +268,30 @@ def main() -> int:
     if snapshot.open_orders_count > 0:
         print(f"STOPPED_BEFORE_EXIT: open_orders_count={snapshot.open_orders_count}")
         return 1
-    recover_from_halt = can_recover_cleanup_exit_halt(
+    position = next((p for p in snapshot.positions if p.coin == coin), None)
+    exchange_qty = position.qty if position is not None else 0.0
+
+    recover_from_cleanup_halt = can_recover_cleanup_exit_halt(
         state=state,
         network=network,
         recover_flag=args.recover_from_cleanup_exit_halt,
         confirmed=args.confirm,
         open_orders_count=snapshot.open_orders_count,
     )
+    recover_from_target_runner_halt = can_recover_target_runner_validation_halt(
+        state=state,
+        network=network,
+        recover_flag=args.recover_from_target_runner_validation_halt,
+        confirmed=args.confirm,
+        open_orders_count=snapshot.open_orders_count,
+        exchange_qty=exchange_qty,
+    )
+    recover_from_halt = recover_from_cleanup_halt or recover_from_target_runner_halt
     if state.halted and not recover_from_halt:
         print("STOPPED_BEFORE_EXIT: local_state_halted")
         print("halt_reason=" + str(state.halt_reason))
         return 1
 
-    position = next((p for p in snapshot.positions if p.coin == coin), None)
-    exchange_qty = position.qty if position is not None else 0.0
     if exchange_qty <= EPSILON:
         print("STOPPED_BEFORE_EXIT: no_position_to_exit")
         return 1
@@ -267,6 +310,8 @@ def main() -> int:
             print("STOPPED_BEFORE_EXIT: recovery_state_not_aligned")
             return 1
         state.state = BotState.BASE_LONG if not state.addon_lots else BotState.PYRAMID_LONG
+        if recover_from_target_runner_halt and not state.addon_lots:
+            state.state = BotState.STARTER_LONG
         state.halted = False
         state.halt_reason = None
         print("recovery_guard=allowed")
@@ -352,17 +397,22 @@ def main() -> int:
     print("reduce_only=True")
     print("exit_qty=" + decimal_to_plain_string(qty_dec))
     exit_aggr_bps = float(
-        config.execution.get(
+        args.exit_aggressiveness_bps
+        if args.exit_aggressiveness_bps is not None
+        else config.execution.get(
             "exit_price_aggressiveness_bps",
             hl_cfg.get("exit_price_aggressiveness_bps", 2),
         )
     )
     max_oracle_bps = float(
-        config.execution.get(
+        args.max_oracle_deviation_bps
+        if args.max_oracle_deviation_bps is not None
+        else config.execution.get(
             "max_oracle_deviation_bps",
             hl_cfg.get("max_oracle_deviation_bps", 5),
         )
     )
+    time_in_force = args.time_in_force or str(config.execution.get("time_in_force", "gtc"))
     price_info = compute_oracle_safe_exit_price(
         "sell",
         mark_price,
@@ -375,11 +425,23 @@ def main() -> int:
     print("raw_exit_px=" + str(price_info.raw_exit_px))
     print("formatted_exit_px=" + str(price_info.formatted_exit_px))
     print("max_deviation_bps=" + str(price_info.max_deviation_bps))
+    print("exit_aggressiveness_bps=" + str(exit_aggr_bps))
+    print("time_in_force=" + time_in_force)
+
+    execution_cfg = dict(config.execution)
+    execution_cfg.update(
+        {
+            "time_in_force": time_in_force,
+            "exit_price_aggressiveness_bps": exit_aggr_bps,
+            "max_oracle_deviation_bps": max_oracle_bps,
+        }
+    )
+    probe_config = config.model_copy(update={"execution": execution_cfg})
 
     order_result = execute_hl(
         decision,
         state,
-        config,
+        probe_config,
         client,
         wallet,
         private_key,
@@ -403,10 +465,11 @@ def main() -> int:
         order_result.applied_state_after = state.state.value
         risk_status = "halted"
     elif order_result.status == OrderResultStatus.SUBMITTED_UNFILLED:
-        state.pending_order = _pending_from_order_result(state, decision, order_result)
+        is_ioc = time_in_force.lower() == "ioc"
+        state.pending_order = None if is_ioc else _pending_from_order_result(state, decision, order_result)
         state.state = BotState.HALTED
         state.halted = True
-        state.halt_reason = "unfilled_emergency_exit"
+        state.halt_reason = "ioc_flatten_unfilled_position_still_open" if is_ioc else "unfilled_emergency_exit"
         order_result.applied_state_after = state.state.value
         risk_status = "halted"
     elif fill is not None:

@@ -4,7 +4,9 @@ from datetime import datetime, timezone
 
 from scripts.flatten_hl_position import (
     RECOVERABLE_CLEANUP_EXIT_HALT_PREFIX,
+    TARGET_RUNNER_VALIDATION_HALT_REASON,
     can_recover_cleanup_exit_halt,
+    can_recover_target_runner_validation_halt,
 )
 from src.core.models import BotState, PendingOrder, ThesisState
 
@@ -120,3 +122,80 @@ def test_recoverable_cleanup_price_halt_refuses_mainnet():
         open_orders_count=0,
     )
 
+
+def _target_runner_halted_state(**overrides) -> ThesisState:
+    values = {
+        "symbol": "BTC",
+        "state": BotState.HALTED,
+        "halted": True,
+        "halt_reason": TARGET_RUNNER_VALIDATION_HALT_REASON,
+        "current_position_qty": 0.005,
+        "original_base_qty": 0.005,
+    }
+    values.update(overrides)
+    return ThesisState(**values)
+
+
+def test_target_runner_validation_halt_allows_explicit_testnet_ioc_flatten_recovery():
+    state = _target_runner_halted_state()
+
+    assert can_recover_target_runner_validation_halt(
+        state=state,
+        network="testnet",
+        recover_flag=True,
+        confirmed=True,
+        open_orders_count=0,
+        exchange_qty=0.005,
+    )
+
+
+def test_target_runner_validation_halt_requires_exact_halt_reason():
+    state = _target_runner_halted_state(halt_reason=RECOVERABLE_CLEANUP_EXIT_HALT_PREFIX + " asset=3")
+
+    assert not can_recover_target_runner_validation_halt(
+        state=state,
+        network="testnet",
+        recover_flag=True,
+        confirmed=True,
+        open_orders_count=0,
+        exchange_qty=0.005,
+    )
+
+
+def test_target_runner_validation_halt_refuses_pending_order():
+    state = _target_runner_halted_state(pending_order=_pending_order())
+
+    assert not can_recover_target_runner_validation_halt(
+        state=state,
+        network="testnet",
+        recover_flag=True,
+        confirmed=True,
+        open_orders_count=0,
+        exchange_qty=0.005,
+    )
+
+
+def test_target_runner_validation_halt_refuses_open_orders():
+    state = _target_runner_halted_state()
+
+    assert not can_recover_target_runner_validation_halt(
+        state=state,
+        network="testnet",
+        recover_flag=True,
+        confirmed=True,
+        open_orders_count=1,
+        exchange_qty=0.005,
+    )
+
+
+def test_target_runner_validation_halt_refuses_qty_mismatch():
+    state = _target_runner_halted_state(current_position_qty=0.004)
+
+    assert not can_recover_target_runner_validation_halt(
+        state=state,
+        network="testnet",
+        recover_flag=True,
+        confirmed=True,
+        open_orders_count=0,
+        exchange_qty=0.005,
+    )

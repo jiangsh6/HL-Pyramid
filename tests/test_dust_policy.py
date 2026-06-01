@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from scripts import cleanup_hl_dust_position, flatten_hl_position, reset_state
 from src.core.config_loader import load_config
-from src.core.models import BotState, LotRecord, PendingOrder, ThesisState
+from src.core.models import ActionType, BotState, LotRecord, OrderResult, OrderResultStatus, PendingOrder, ThesisState
 from src.execution.reconciler import reconcile_state_with_exchange
 from src.hl.account import HLAccountSnapshot, HLFill, HLOpenOrder, HLPosition
 from src.reporting.state_writer import read_state, update_dust_state, write_state
@@ -48,6 +48,22 @@ def _dust_state() -> ThesisState:
     state.current_position_qty = 0.00025
     state.original_base_qty = 0.00125
     state.avg_entry_price = 71860.0
+    state.sz_decimals = 5
+    return state
+
+
+def _target_runner_halted_state() -> ThesisState:
+    state = ThesisState(symbol="BTC", state=BotState.HALTED, halted=True)
+    state.halt_reason = "exit_order_canceled_position_still_open"
+    state.base_lot = LotRecord(
+        lot_id="base",
+        entry_price=72380.0,
+        qty=0.005,
+        entry_date=date(2026, 5, 31),
+    )
+    state.current_position_qty = 0.005
+    state.original_base_qty = 0.005
+    state.avg_entry_price = 72380.0
     state.sz_decimals = 5
     return state
 
@@ -175,6 +191,62 @@ def test_flatten_blocks_dust_before_order_and_writes_logs(tmp_path, monkeypatch)
     assert persisted.halt_reason == "dust_position_below_min_size"
     assert "blocked_pre_order" in (tmp_path / "orders.csv").read_text()
     assert "dust_position" in (tmp_path / "risk.csv").read_text()
+
+
+def test_ioc_flatten_recovery_unfilled_leaves_no_pending_order(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    state_path = tmp_path / "state.json"
+    write_state(_target_runner_halted_state(), str(state_path))
+
+    def fake_execute(decision, state, config, client, wallet, private_key, mark_price):
+        assert config.execution["time_in_force"] == "ioc"
+        return OrderResult(
+            status=OrderResultStatus.SUBMITTED_UNFILLED,
+            action=ActionType.EXIT_ALL,
+            side="sell",
+            reduce_only=True,
+            submitted_qty=decision.qty,
+            filled_qty=0.0,
+            remaining_qty=decision.qty,
+            limit_px=72000.0,
+            raw_status_sanitized="resting",
+            state_before=state.state.value,
+            intended_state_after=BotState.EXITED.value,
+            applied_state_after=state.state.value,
+            created_at=datetime.now(timezone.utc),
+        )
+
+    monkeypatch.setattr(flatten_hl_position, "load_config", lambda *_: cfg)
+    monkeypatch.setattr(flatten_hl_position, "get_private_key", lambda *_: "secret")
+    monkeypatch.setattr(flatten_hl_position, "HyperliquidClient", lambda **_: object())
+    monkeypatch.setattr(flatten_hl_position, "get_account_snapshot", lambda *a, **kw: _snapshot(position_qty=0.005))
+    monkeypatch.setattr(flatten_hl_position, "get_recent_user_fills", lambda *a, **kw: [])
+    monkeypatch.setattr(flatten_hl_position, "execute_hl", fake_execute)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "flatten_hl_position.py",
+            "--config",
+            "ignored.yaml",
+            "--coin",
+            "BTC",
+            "--recover-from-target-runner-validation-halt",
+            "--time-in-force",
+            "ioc",
+            "--confirm",
+            "--one-cycle",
+        ],
+    )
+
+    rc = flatten_hl_position.main()
+
+    persisted = read_state(str(state_path))
+    assert rc == 1
+    assert persisted.state == BotState.HALTED
+    assert persisted.halt_reason == "ioc_flatten_unfilled_position_still_open"
+    assert persisted.pending_order is None
+    assert persisted.current_position_qty == 0.005
 
 
 def test_reset_state_refuses_local_position(tmp_path, monkeypatch, capsys):
