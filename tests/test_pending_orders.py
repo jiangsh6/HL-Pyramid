@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -294,6 +294,95 @@ def test_pending_order_blocks_duplicate_opening(tmp_path, monkeypatch):
     assert persisted.pending_order is not None
     assert persisted.pending_order.oid == 54015974761
     assert "existing_open_order" in (tmp_path / "decisions.csv").read_text()
+
+
+def test_stale_pending_order_halts_for_cancel_or_reconcile(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    cfg.execution["pending_order_max_age_minutes"] = 10
+    state = ThesisState(symbol="BTC", pending_order=PendingOrder(
+        oid=54015974761,
+        symbol="BTC",
+        action="buy_starter",
+        side="buy",
+        reduce_only=False,
+        order_type="limit",
+        qty=0.00124,
+        qty_submitted=0.00124,
+        qty_filled=0.0,
+        qty_remaining=0.00124,
+        limit_px=72389.0,
+        status="submitted_unfilled",
+        created_at=datetime.now(timezone.utc) - timedelta(minutes=20),
+    ))
+    decision = Decision(
+        action=ActionType.BUY_STARTER,
+        qty=0.00124,
+        reason="starter_entry_conditions_met",
+        new_state=BotState.STARTER_LONG,
+    )
+    snapshot = _snapshot(open_buy_order=HLOpenOrder(
+        oid=54015974761, coin="BTC", side="B", qty=0.00124, limit_px=72389.0
+    ))
+    _patch_common(monkeypatch, snapshot, decision)
+    dispatch = MagicMock()
+    monkeypatch.setattr(live_script, "_dispatch_broker", dispatch)
+
+    live_script._STOP_EVENT.clear()
+    status = live_script.run_decision_cycle(
+        cfg, state, tmp_path / "state.json", MagicMock(), TESTNET_WALLET, FAKE_KEY
+    )
+
+    assert status == live_script.STALE_PENDING_ORDER
+    dispatch.assert_not_called()
+    persisted = read_state(str(tmp_path / "state.json"))
+    assert persisted.state == BotState.HALTED
+    assert persisted.halt_reason == "stale_pending_order_requires_cancel_or_reconcile"
+    assert persisted.pending_order is not None
+    assert persisted.pending_order.status == "stale"
+
+
+def test_fresh_pending_order_stays_blocked_without_stale_halt(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    cfg.execution["pending_order_max_age_minutes"] = 10
+    state = ThesisState(symbol="BTC", pending_order=PendingOrder(
+        oid=54015974761,
+        symbol="BTC",
+        action="buy_starter",
+        side="buy",
+        reduce_only=False,
+        order_type="limit",
+        qty=0.00124,
+        qty_submitted=0.00124,
+        qty_filled=0.0,
+        qty_remaining=0.00124,
+        limit_px=72389.0,
+        status="submitted_unfilled",
+        created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+    ))
+    decision = Decision(
+        action=ActionType.BUY_STARTER,
+        qty=0.00124,
+        reason="starter_entry_conditions_met",
+        new_state=BotState.STARTER_LONG,
+    )
+    snapshot = _snapshot(open_buy_order=HLOpenOrder(
+        oid=54015974761, coin="BTC", side="B", qty=0.00124, limit_px=72389.0
+    ))
+    _patch_common(monkeypatch, snapshot, decision)
+    dispatch = MagicMock()
+    monkeypatch.setattr(live_script, "_dispatch_broker", dispatch)
+
+    live_script._STOP_EVENT.clear()
+    status = live_script.run_decision_cycle(
+        cfg, state, tmp_path / "state.json", MagicMock(), TESTNET_WALLET, FAKE_KEY
+    )
+
+    assert status == live_script.BLOCKED_EXISTING_OPEN_ORDER
+    dispatch.assert_not_called()
+    persisted = read_state(str(tmp_path / "state.json"))
+    assert persisted.state == BotState.FLAT
+    assert persisted.pending_order is not None
+    assert persisted.pending_order.status == "submitted_unfilled"
 
 
 def test_exchange_position_without_reconstructable_fill_halts(tmp_path, monkeypatch):

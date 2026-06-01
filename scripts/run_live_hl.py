@@ -87,6 +87,7 @@ STOPPED = "STOPPED"
 BLOCKED_NO_COLLATERAL = "BLOCKED_NO_COLLATERAL"
 BLOCKED_EXISTING_OPEN_ORDER = "BLOCKED_EXISTING_OPEN_ORDER"
 RECONCILED = "RECONCILED"
+STALE_PENDING_ORDER = "STALE_PENDING_ORDER"
 
 _BUY_ACTION_TYPES = frozenset({
     ActionType.BUY_STARTER,
@@ -258,6 +259,45 @@ def _is_ioc_execution(config: BotConfig) -> bool:
     return str((config.execution or {}).get("time_in_force", "gtc")).strip().lower() == "ioc"
 
 
+def pending_order_age_minutes(pending: PendingOrder, *, now: Optional[datetime] = None) -> Optional[float]:
+    created = pending.created_at
+    if created is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return max((now - created).total_seconds() / 60.0, 0.0)
+
+
+def pending_order_max_age_minutes(config: BotConfig) -> Optional[float]:
+    raw = (config.execution or {}).get("pending_order_max_age_minutes")
+    if raw is None:
+        return None
+    value = float(raw)
+    return value if value > 0 else None
+
+
+def mark_stale_pending_order_if_needed(
+    state: ThesisState,
+    config: BotConfig,
+    *,
+    now: Optional[datetime] = None,
+) -> bool:
+    pending = state.pending_order
+    max_age = pending_order_max_age_minutes(config)
+    if pending is None or max_age is None:
+        return False
+    age = pending_order_age_minutes(pending, now=now)
+    if age is None or age <= max_age:
+        return False
+    pending.status = "stale"
+    pending.last_checked_at = now or datetime.now(timezone.utc)
+    state.state = BotState.HALTED
+    state.halted = True
+    state.halt_reason = "stale_pending_order_requires_cancel_or_reconcile"
+    return True
+
+
 def _normalize_dispatch_result(
     result,
     decision: Decision,
@@ -427,6 +467,7 @@ def run_decision_cycle(
         state, reconcile_result = reconcile_state_with_exchange(
             state, hl_snapshot, recent_fills, config
         )
+        stale_pending = mark_stale_pending_order_if_needed(state, config)
         if reconcile_result.status.value != "ok":
             write_state(state, str(state_path))
             decision = Decision(
@@ -465,12 +506,19 @@ def run_decision_cycle(
                 order_qty_override=0.0,
                 risk_status_override=risk_status,
             )
+            if stale_pending:
+                _STOP_EVENT.set()
+                return STALE_PENDING_ORDER
             if reconcile_result.status.value == "halted":
                 _STOP_EVENT.set()
                 return HALTED
             if reconcile_result.status.value == "refreshed_pending_order":
                 return BLOCKED_EXISTING_OPEN_ORDER
             return RECONCILED
+        if stale_pending:
+            write_state(state, str(state_path))
+            _STOP_EVENT.set()
+            return STALE_PENDING_ORDER
 
     # d. Run the decision engine on a working copy so intended state/mode
     # changes are not treated as applied position state before a fill exists.
