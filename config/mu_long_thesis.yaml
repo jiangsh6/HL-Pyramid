@@ -247,6 +247,9 @@ logging:
 notifications:
   enabled: false
   telegram_enabled: false         # Placeholder only — never called in v0.1
+  heartbeat_enabled: false
+  trade_alerts_enabled: false
+  decision_alerts_enabled: false
   notify_on:
     - entry
     - add

@@ -218,6 +218,9 @@ logging:
 notifications:
   enabled: false
   telegram_enabled: false
+  heartbeat_enabled: false
+  trade_alerts_enabled: false
+  decision_alerts_enabled: false
   notify_on:
     - halt
 

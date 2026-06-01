@@ -63,6 +63,11 @@ from src.hl.funding import (
     get_predicted_funding,
 )
 from src.hl.ws_feed import MAINNET_WS_URL, TESTNET_WS_URL, HLWebSocketFeed
+from src.notifications.telegram import (
+    TelegramNotifier,
+    alert_toggle_enabled,
+    notify_event,
+)
 from src.reporting.daily_summary import format_summary
 from src.reporting.logger import log_cycle
 from src.reporting.state_writer import (
@@ -405,6 +410,113 @@ def _log_cycle_safely(
         _log.error("log_cycle failed: %s", exc)
 
 
+def build_telegram_notifier(config: BotConfig) -> TelegramNotifier:
+    return TelegramNotifier.from_config(config.notifications or {}, logger=_log)
+
+
+def _safety_alert_enabled(config: BotConfig) -> bool:
+    notifications = config.notifications or {}
+    return bool(notifications.get("enabled", False)) and bool(notifications.get("telegram_enabled", False))
+
+
+def _notify_if_enabled(
+    *,
+    config: BotConfig,
+    notifier: TelegramNotifier,
+    toggle: Optional[str],
+    event: dict,
+) -> None:
+    enabled = _safety_alert_enabled(config) if toggle is None else alert_toggle_enabled(config.notifications or {}, toggle)
+    if not enabled:
+        return
+    try:
+        notify_event(notifier, event)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("telegram_notify_failed=true error_type=%s", type(exc).__name__)
+
+
+def _notify_safety(
+    *,
+    config: BotConfig,
+    notifier: TelegramNotifier,
+    event: str,
+    state: ThesisState,
+    coin: str,
+    dry_run: bool,
+    reason: Optional[str] = None,
+) -> None:
+    _notify_if_enabled(
+        config=config,
+        notifier=notifier,
+        toggle=None,
+        event={
+            "type": "safety",
+            "event": event,
+            "coin": coin,
+            "state": state.state.value,
+            "halted": state.halted,
+            "halt_reason": state.halt_reason,
+            "reason": reason,
+            "dry_run": dry_run,
+        },
+    )
+
+
+def _notify_decision(
+    *,
+    config: BotConfig,
+    notifier: TelegramNotifier,
+    coin: str,
+    decision: Decision,
+    state_before: str,
+    price: Optional[float],
+    mark: Optional[float],
+    oracle: Optional[float],
+    dry_run: bool,
+) -> None:
+    _notify_if_enabled(
+        config=config,
+        notifier=notifier,
+        toggle="decision_alerts_enabled",
+        event={
+            "type": "decision",
+            "coin": coin,
+            "decision": decision.action.value,
+            "reason": decision.reason,
+            "state_before": state_before,
+            "price": price,
+            "mark": mark,
+            "oracle": oracle,
+            "dry_run": dry_run,
+        },
+    )
+
+
+def _notify_order(
+    *,
+    config: BotConfig,
+    notifier: TelegramNotifier,
+    order_result: OrderResult,
+) -> None:
+    _notify_if_enabled(
+        config=config,
+        notifier=notifier,
+        toggle="trade_alerts_enabled",
+        event={
+            "type": "order",
+            "status": order_result.status.value,
+            "action": order_result.action.value,
+            "reduce_only": order_result.reduce_only,
+            "side": order_result.side,
+            "qty": order_result.submitted_qty,
+            "px": order_result.avg_fill_px or order_result.limit_px,
+            "oid": order_result.oid,
+            "filled_qty": order_result.filled_qty,
+            "remaining_qty": order_result.remaining_qty,
+        },
+    )
+
+
 # ── Main decision cycle (4h candle close) ─────────────────────────────────────
 
 def run_decision_cycle(
@@ -416,6 +528,7 @@ def run_decision_cycle(
     private_key: str,
     feed: Optional[HLWebSocketFeed] = None,
     dry_run: bool = False,
+    notifier: Optional[TelegramNotifier] = None,
 ) -> str:
     """
     One full decision cycle (Section 8.1 steps a–i):
@@ -432,6 +545,7 @@ def run_decision_cycle(
     hl_cfg   = config.hl or {}
     coin     = hl_cfg.get("coin", "BTC")
     interval = hl_cfg.get("bar_interval", "4h")
+    notifier = notifier or build_telegram_notifier(config)
 
     # a. Fetch candle history
     history_bars = int(config.data.get("required_history_days", 120))
@@ -513,16 +627,52 @@ def run_decision_cycle(
                 risk_status_override=risk_status,
             )
             if stale_pending:
+                _notify_safety(
+                    config=config,
+                    notifier=notifier,
+                    event="stale_pending_detected",
+                    state=state,
+                    coin=coin,
+                    dry_run=dry_run,
+                    reason=reconcile_result.reason,
+                )
                 _STOP_EVENT.set()
                 return STALE_PENDING_ORDER
             if reconcile_result.status.value == "halted":
+                _notify_safety(
+                    config=config,
+                    notifier=notifier,
+                    event=reconcile_result.halt_reason or reconcile_result.reason,
+                    state=state,
+                    coin=coin,
+                    dry_run=dry_run,
+                    reason=reconcile_result.reason,
+                )
                 _STOP_EVENT.set()
                 return HALTED
             if reconcile_result.status.value == "refreshed_pending_order":
+                _notify_safety(
+                    config=config,
+                    notifier=notifier,
+                    event="duplicate_order_blocked",
+                    state=state,
+                    coin=coin,
+                    dry_run=dry_run,
+                    reason=reconcile_result.reason,
+                )
                 return BLOCKED_EXISTING_OPEN_ORDER
             return RECONCILED
         if stale_pending:
             write_state(state, str(state_path))
+            _notify_safety(
+                config=config,
+                notifier=notifier,
+                event="stale_pending_detected",
+                state=state,
+                coin=coin,
+                dry_run=dry_run,
+                reason="pending_order_exceeded_max_age",
+            )
             _STOP_EVENT.set()
             return STALE_PENDING_ORDER
 
@@ -532,6 +682,17 @@ def run_decision_cycle(
     decision = engine_run(state_for_engine, indicators, config, hl_snapshot=hl_snapshot)
     fill = None
     order_result = None
+    _notify_decision(
+        config=config,
+        notifier=notifier,
+        coin=coin,
+        decision=decision,
+        state_before=state_before,
+        price=indicators.close or indicators.adj_close,
+        mark=None,
+        oracle=None,
+        dry_run=dry_run,
+    )
     _sync_observation_state(
         state,
         state_for_engine,
@@ -579,12 +740,30 @@ def run_decision_cycle(
                 order_qty_override=0.0,
                 risk_status_override="blocked",
             )
+            _notify_safety(
+                config=config,
+                notifier=notifier,
+                event="order_blocked",
+                state=state,
+                coin=coin,
+                dry_run=dry_run,
+                reason=blocker_reason,
+            )
             _STOP_EVENT.set()
             return BLOCKED_NO_COLLATERAL
 
         if dry_run:
             _log.info("DRY RUN: would execute %s (qty=%s reason=%s)",
                       decision.action.value, decision.qty, decision.reason)
+            _notify_safety(
+                config=config,
+                notifier=notifier,
+                event="dry_run_order_blocked",
+                state=state,
+                coin=coin,
+                dry_run=dry_run,
+                reason=decision.reason,
+            )
         else:
             cycle_risk_status_override = None
             mark_price = None
@@ -616,6 +795,17 @@ def run_decision_cycle(
                     created_at=datetime.now(timezone.utc),
                 )
             action_class = classify_action(decision.action)
+            _notify_order(config=config, notifier=notifier, order_result=order_result)
+            if decision.action == ActionType.EXIT_ALL:
+                _notify_safety(
+                    config=config,
+                    notifier=notifier,
+                    event="emergency_exit_submitted",
+                    state=state,
+                    coin=coin,
+                    dry_run=dry_run,
+                    reason=decision.reason,
+                )
 
             if order_result.status == OrderResultStatus.EXECUTION_ERROR:
                 state.state = BotState.HALTED
@@ -638,6 +828,15 @@ def run_decision_cycle(
                     order_qty_override=decision.qty,
                     risk_status_override="halted",
                 )
+                _notify_safety(
+                    config=config,
+                    notifier=notifier,
+                    event="emergency_exit_failed" if decision.action == ActionType.EXIT_ALL else "execution_error",
+                    state=state,
+                    coin=coin,
+                    dry_run=dry_run,
+                    reason=state.halt_reason,
+                )
                 _STOP_EVENT.set()
                 return EXECUTION_ERROR
             if order_result.status == OrderResultStatus.UNKNOWN:
@@ -655,6 +854,15 @@ def run_decision_cycle(
                     state_before=state_before,
                     order_result=order_result,
                     risk_status_override="halted",
+                )
+                _notify_safety(
+                    config=config,
+                    notifier=notifier,
+                    event="HALTED",
+                    state=state,
+                    coin=coin,
+                    dry_run=dry_run,
+                    reason=state.halt_reason,
                 )
                 _STOP_EVENT.set()
                 return HALTED
@@ -678,6 +886,15 @@ def run_decision_cycle(
                         order_result=order_result,
                         risk_status_override="halted",
                     )
+                    _notify_safety(
+                        config=config,
+                        notifier=notifier,
+                        event="emergency_exit_failed" if decision.action == ActionType.EXIT_ALL else "HALTED",
+                        state=state,
+                        coin=coin,
+                        dry_run=dry_run,
+                        reason=state.halt_reason,
+                    )
                     _STOP_EVENT.set()
                     return HALTED
                 write_state(state, str(state_path))
@@ -691,6 +908,15 @@ def run_decision_cycle(
                     state_before=state_before,
                     order_result=order_result,
                     risk_status_override="blocked",
+                )
+                _notify_safety(
+                    config=config,
+                    notifier=notifier,
+                    event="order_rejected",
+                    state=state,
+                    coin=coin,
+                    dry_run=dry_run,
+                    reason=order_result.exchange_error_sanitized or order_result.raw_status_sanitized,
                 )
                 return CONTINUE
 
@@ -725,6 +951,15 @@ def run_decision_cycle(
                 )
                 if decision.action == ActionType.SELL_STOP:
                     return BLOCKED_EXISTING_OPEN_ORDER
+                _notify_safety(
+                    config=config,
+                    notifier=notifier,
+                    event="emergency_exit_failed",
+                    state=state,
+                    coin=coin,
+                    dry_run=dry_run,
+                    reason=state.halt_reason,
+                )
                 _STOP_EVENT.set()
                 return HALTED
 
@@ -800,6 +1035,15 @@ def run_decision_cycle(
                     )
                     if decision.action == ActionType.SELL_STOP:
                         return BLOCKED_EXISTING_OPEN_ORDER
+                    _notify_safety(
+                        config=config,
+                        notifier=notifier,
+                        event="emergency_exit_failed",
+                        state=state,
+                        coin=coin,
+                        dry_run=dry_run,
+                        reason=state.halt_reason,
+                    )
                     _STOP_EVENT.set()
                     return HALTED
             elif order_result.status == OrderResultStatus.SUBMITTED_UNFILLED:
@@ -828,6 +1072,15 @@ def run_decision_cycle(
             equity=equity,
             state_before=state_before,
             risk_status_override="halted",
+        )
+        _notify_safety(
+            config=config,
+            notifier=notifier,
+            event="HALTED",
+            state=state,
+            coin=coin,
+            dry_run=dry_run,
+            reason=state.halt_reason,
         )
         _STOP_EVENT.set()
         return HALTED
@@ -889,18 +1142,29 @@ def emit_heartbeat(
     *,
     open_orders_count: Optional[int],
     last_decision: Optional[str],
+    network: Optional[str] = None,
+    coin: Optional[str] = None,
+    exchange_position_qty: Optional[float] = None,
+    dry_run: Optional[bool] = None,
     logger: Optional[logging.Logger] = None,
     now: Optional[datetime] = None,
 ) -> dict:
     pending = state.pending_order
     event = {
         "timestamp": (now or datetime.now(timezone.utc)).isoformat(),
+        "network": network,
+        "coin": coin,
         "state": state.state.value,
         "position_qty": state.current_position_qty,
+        "local_position_qty": state.current_position_qty,
+        "exchange_position_qty": exchange_position_qty,
         "open_orders_count": open_orders_count,
         "pending_order_status": pending.status if pending is not None else None,
         "pending_order_oid": pending.oid if pending is not None else None,
+        "halted": state.halted,
+        "halt_reason": state.halt_reason,
         "last_decision": last_decision,
+        "dry_run": dry_run,
     }
     log = logger or _log
     log.info(
@@ -936,6 +1200,31 @@ def _heartbeat_open_orders_count(
     return snapshot.open_orders_count
 
 
+def _heartbeat_exchange_summary(
+    *,
+    wallet_address: str,
+    client: HyperliquidClient,
+    config: BotConfig,
+) -> dict:
+    try:
+        snapshot = get_account_snapshot(
+            wallet_address,
+            client,
+            collateral_mode=(config.hl or {}).get("collateral_mode", "unified"),
+            include_open_orders=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("Heartbeat account snapshot failed: %s", exc)
+        return {"open_orders_count": None, "exchange_position_qty": None}
+
+    coin = (config.hl or {}).get("coin", config.symbol.get("ticker", "BTC"))
+    position = next((pos for pos in snapshot.positions if pos.coin == coin), None)
+    return {
+        "open_orders_count": snapshot.open_orders_count,
+        "exchange_position_qty": position.qty if position is not None else 0.0,
+    }
+
+
 def run_recurring_loop(
     config: BotConfig,
     state: ThesisState,
@@ -949,6 +1238,7 @@ def run_recurring_loop(
     max_cycles: Optional[int] = None,
     stop_event: Optional[threading.Event] = None,
     sleep_fn: Optional[Callable[[float], None]] = None,
+    notifier: Optional[TelegramNotifier] = None,
 ) -> str:
     """
     Testable supervised loop foundation.
@@ -962,20 +1252,41 @@ def run_recurring_loop(
     stop = stop_event or _STOP_EVENT
     sleeper = sleep_fn or time.sleep
     interval_seconds = loop_interval_minutes(config) * 60.0
-    symbol = config.symbol.get("ticker", (config.hl or {}).get("coin", state.symbol))
+    network = (config.hl or {}).get("network", config.bot.get("mode"))
+    coin = (config.hl or {}).get("coin", state.symbol)
+    symbol = config.symbol.get("ticker", coin)
+    notifier = notifier or build_telegram_notifier(config)
     cycles = 0
     last_status = STOPPED
 
     try:
         if not state_path.exists():
             write_state(state, str(state_path))
+        _notify_safety(
+            config=config,
+            notifier=notifier,
+            event="loop_begin",
+            state=state,
+            coin=coin,
+            dry_run=dry_run,
+            reason=f"interval_minutes={loop_interval_minutes(config)}",
+        )
         while not stop.is_set():
             loaded_state, terminal = load_state_or_halt(str(state_path), symbol, logger=_log)
             if terminal:
-                emit_heartbeat(
+                heartbeat = emit_heartbeat(
                     loaded_state,
                     open_orders_count=None,
                     last_decision=HALTED,
+                    network=network,
+                    coin=coin,
+                    dry_run=dry_run,
+                )
+                _notify_if_enabled(
+                    config=config,
+                    notifier=notifier,
+                    toggle="heartbeat_enabled",
+                    event={"type": "heartbeat", **heartbeat},
                 )
                 stop.set()
                 return HALTED
@@ -990,6 +1301,7 @@ def run_recurring_loop(
                 private_key,
                 feed=feed,
                 dry_run=dry_run,
+                notifier=notifier,
             )
 
             try:
@@ -997,21 +1309,50 @@ def run_recurring_loop(
             except Exception:  # noqa: BLE001
                 pass
 
-            emit_heartbeat(
+            exchange_summary = _heartbeat_exchange_summary(
+                wallet_address=wallet_address,
+                client=client,
+                config=config,
+            )
+            heartbeat = emit_heartbeat(
                 state,
-                open_orders_count=_heartbeat_open_orders_count(
-                    wallet_address=wallet_address,
-                    client=client,
-                    config=config,
-                ),
+                open_orders_count=exchange_summary["open_orders_count"],
                 last_decision=last_status,
+                network=network,
+                coin=coin,
+                exchange_position_qty=exchange_summary["exchange_position_qty"],
+                dry_run=dry_run,
+            )
+            _notify_if_enabled(
+                config=config,
+                notifier=notifier,
+                toggle="heartbeat_enabled",
+                event={"type": "heartbeat", **heartbeat},
             )
 
             cycles += 1
             if last_status != CONTINUE:
                 stop.set()
+                _notify_safety(
+                    config=config,
+                    notifier=notifier,
+                    event="loop_complete",
+                    state=state,
+                    coin=coin,
+                    dry_run=dry_run,
+                    reason=last_status,
+                )
                 return last_status
             if max_cycles is not None and cycles >= max_cycles:
+                _notify_safety(
+                    config=config,
+                    notifier=notifier,
+                    event="loop_complete",
+                    state=state,
+                    coin=coin,
+                    dry_run=dry_run,
+                    reason=f"max_cycles={max_cycles}",
+                )
                 return last_status
             if stop.is_set():
                 break
