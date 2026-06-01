@@ -61,6 +61,13 @@ def _no_action(reason: str, blockers: Optional[List[str]] = None,
     )
 
 
+def _pending_order_is_exit_resolution_required(state: ThesisState) -> bool:
+    pending = state.pending_order
+    if pending is None:
+        return False
+    return bool(pending.reduce_only or str(pending.side).lower() in {"sell", "a", "ask"})
+
+
 def run(
     state: ThesisState,
     indicators: IndicatorSnapshot,
@@ -117,6 +124,13 @@ def run(
             reason=state.halt_reason or state.dust_reason or "dust_position",
             blockers=[state.dust_reason or "dust_position"],
             new_state=BotState.HALTED if state.halted else state.state,
+            indicators=indicators,
+        )
+
+    if _pending_order_is_exit_resolution_required(state):
+        return _no_action(
+            "pending_exit_resolution_required",
+            blockers=["pending_exit_resolution_required"],
             indicators=indicators,
         )
 

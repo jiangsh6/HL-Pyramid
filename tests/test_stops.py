@@ -1,11 +1,14 @@
 """Section 22.8 — Stop tests."""
 import math
+from datetime import datetime, timezone
+
 import pytest
 
-from src.core.models import ActionType, BotState
+from src.core.models import ActionType, BotState, PendingOrder
 from src.core.decision_engine import run
 from src.strategy.stops import (
     calc_initial_stop, check_intraday_drawdown, check_stop_triggers,
+    hard_stop_price,
     update_trailing_stop,
 )
 from tests._helpers import base_config, make_indicators, make_lot, make_state
@@ -38,6 +41,92 @@ def test_hard_stop_exits_all_and_sets_exited():
     assert d.action == ActionType.SELL_STOP
     assert d.new_state == BotState.EXITED
     assert d.qty == 30
+
+
+def test_hard_stop_uses_configurable_stop_loss_pct():
+    cfg = base_config()
+    cfg.risk["hard_stop"] = {"stop_loss_pct": 0.05}
+    state = make_state(
+        state=BotState.STARTER_LONG,
+        base_lot=make_lot("base", 100.0, 1),
+        avg_entry_price=100.0,
+        current_position_qty=1,
+    )
+
+    assert hard_stop_price(state, cfg) == 95.0
+    ind = make_indicators(adj_close=95.0)
+
+    d = run(state, ind, cfg)
+
+    assert d.action == ActionType.SELL_STOP
+    assert d.qty == 1
+    assert d.new_state == BotState.EXITED
+
+
+@pytest.mark.parametrize("bot_state", [BotState.STARTER_LONG, BotState.PYRAMID_LONG, BotState.RUNNER_LONG])
+def test_hard_stop_supported_for_long_states(bot_state):
+    cfg = base_config()
+    cfg.risk["hard_stop"] = {"stop_loss_pct": 0.05}
+    state = make_state(
+        state=bot_state,
+        base_lot=make_lot("base", 100.0, 1),
+        avg_entry_price=100.0,
+        current_position_qty=1,
+    )
+    if bot_state == BotState.PYRAMID_LONG:
+        state.addon_lots = [make_lot("add_1", 101.0, 1)]
+        state.current_position_qty = 2
+    ind = make_indicators(adj_close=94.0)
+
+    d = run(state, ind, cfg)
+
+    assert d.action == ActionType.SELL_STOP
+    assert d.qty == state.current_position_qty
+
+
+def test_hard_stop_not_triggered_above_configured_stop_price():
+    cfg = base_config()
+    cfg.risk["hard_stop"] = {"stop_loss_pct": 0.05}
+    state = make_state(
+        state=BotState.BASE_LONG,
+        base_lot=make_lot("base", 100.0, 1),
+        avg_entry_price=100.0,
+        current_position_qty=1,
+    )
+    ind = make_indicators(adj_close=95.01)
+
+    d = run(state, ind, cfg)
+
+    assert d.action != ActionType.SELL_STOP
+
+
+def test_pending_reduce_only_exit_blocks_new_decisions():
+    cfg = base_config()
+    state = make_state(
+        state=BotState.BASE_LONG,
+        base_lot=make_lot("base", 100.0, 1),
+        avg_entry_price=100.0,
+        current_position_qty=1,
+        pending_order=PendingOrder(
+            oid=1,
+            action=ActionType.SELL_STOP.value,
+            side="sell",
+            reduce_only=True,
+            qty=1,
+            qty_submitted=1,
+            qty_remaining=1,
+            limit_px=95.0,
+            status="submitted_unfilled",
+            created_at=datetime.now(timezone.utc),
+        ),
+    )
+    ind = make_indicators(adj_close=90.0)
+
+    d = run(state, ind, cfg)
+
+    assert d.action == ActionType.NO_ACTION
+    assert d.reason == "pending_exit_resolution_required"
+    assert "pending_exit_resolution_required" in d.blockers
 
 
 def test_trailing_stop_updated_from_daily_high_before_trigger_check():

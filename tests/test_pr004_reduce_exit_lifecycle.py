@@ -209,7 +209,7 @@ def test_reduce_full_fill_updates_lots(tmp_path, monkeypatch):
     assert persisted.addon_lots == []
 
 
-def test_hard_stop_submitted_unfilled_halts_without_exit(tmp_path, monkeypatch):
+def test_hard_stop_submitted_unfilled_keeps_active_state_with_pending_exit(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     state = _state()
     decision = Decision(action=ActionType.SELL_STOP, qty=0.00124, reason="hard_stop", new_state=BotState.EXITED)
@@ -217,13 +217,17 @@ def test_hard_stop_submitted_unfilled_halts_without_exit(tmp_path, monkeypatch):
 
     status = _run(tmp_path, cfg, state)
     persisted = read_state(str(tmp_path / "state.json"))
-    assert status == live_script.HALTED
-    assert persisted.state == BotState.HALTED
+    assert status == live_script.BLOCKED_EXISTING_OPEN_ORDER
+    assert persisted.state == BotState.BASE_LONG
     assert persisted.current_position_qty == pytest.approx(0.00124)
-    assert persisted.halt_reason == "unfilled_emergency_exit"
+    assert persisted.pending_order is not None
+    assert persisted.pending_order.action == ActionType.SELL_STOP.value
+    assert persisted.pending_order.reduce_only is True
+    assert persisted.halted is False
+    assert persisted.halt_reason is None
 
 
-def test_hard_stop_partial_fill_halts_with_residual(tmp_path, monkeypatch):
+def test_hard_stop_partial_fill_keeps_residual_active_with_pending_exit(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     state = _state()
     decision = Decision(action=ActionType.SELL_STOP, qty=0.00124, reason="hard_stop", new_state=BotState.EXITED)
@@ -231,10 +235,13 @@ def test_hard_stop_partial_fill_halts_with_residual(tmp_path, monkeypatch):
 
     status = _run(tmp_path, cfg, state)
     persisted = read_state(str(tmp_path / "state.json"))
-    assert status == live_script.HALTED
-    assert persisted.state == BotState.HALTED
+    assert status == live_script.BLOCKED_EXISTING_OPEN_ORDER
+    assert persisted.state == BotState.BASE_LONG
     assert persisted.current_position_qty == pytest.approx(0.00074)
-    assert persisted.halt_reason == "residual_position_after_emergency_exit"
+    assert persisted.pending_order is not None
+    assert persisted.pending_order.qty_remaining == pytest.approx(0.00074)
+    assert persisted.halted is False
+    assert persisted.halt_reason is None
 
 
 def test_hard_stop_full_fill_exits(tmp_path, monkeypatch):

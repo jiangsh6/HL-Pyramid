@@ -638,9 +638,14 @@ def run_decision_cycle(
 
             if is_unfilled_emergency_exit(order_result):
                 state.pending_order = _build_pending_order(state, decision, order_result)
-                state.state = BotState.HALTED
-                state.halted = True
-                state.halt_reason = "unfilled_emergency_exit"
+                if decision.action == ActionType.SELL_STOP:
+                    state.state = BotState(state_before)
+                    state.halted = False
+                    state.halt_reason = None
+                else:
+                    state.state = BotState.HALTED
+                    state.halted = True
+                    state.halt_reason = "unfilled_emergency_exit"
                 order_result.applied_state_after = state.state.value
                 write_state(state, str(state_path))
                 _log_cycle_safely(
@@ -652,8 +657,12 @@ def run_decision_cycle(
                     equity=equity,
                     state_before=state_before,
                     order_result=order_result,
-                    risk_status_override="halted",
+                    risk_status_override=(
+                        "pending_exit" if decision.action == ActionType.SELL_STOP else "halted"
+                    ),
                 )
+                if decision.action == ActionType.SELL_STOP:
+                    return BLOCKED_EXISTING_OPEN_ORDER
                 _STOP_EVENT.set()
                 return HALTED
 
@@ -697,9 +706,14 @@ def run_decision_cycle(
                     action_class == ActionClass.EMERGENCY_EXIT
                     and state.current_position_qty > 1e-9
                 ):
-                    state.state = BotState.HALTED
-                    state.halted = True
-                    state.halt_reason = "residual_position_after_emergency_exit"
+                    if decision.action == ActionType.SELL_STOP:
+                        state.state = BotState(state_before)
+                        state.halted = False
+                        state.halt_reason = None
+                    else:
+                        state.state = BotState.HALTED
+                        state.halted = True
+                        state.halt_reason = "residual_position_after_emergency_exit"
                     order_result.applied_state_after = state.state.value
                     write_state(state, str(state_path))
                     _log_cycle_safely(
@@ -711,8 +725,12 @@ def run_decision_cycle(
                         equity=equity,
                         state_before=state_before,
                         order_result=order_result,
-                        risk_status_override="halted",
+                        risk_status_override=(
+                            "pending_exit" if decision.action == ActionType.SELL_STOP else "halted"
+                        ),
                     )
+                    if decision.action == ActionType.SELL_STOP:
+                        return BLOCKED_EXISTING_OPEN_ORDER
                     _STOP_EVENT.set()
                     return HALTED
             elif order_result.status == OrderResultStatus.SUBMITTED_UNFILLED:

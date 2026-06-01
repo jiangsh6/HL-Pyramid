@@ -17,6 +17,25 @@ def calc_initial_stop(entry_price: float, atr14: float, config: BotConfig) -> fl
     return min(pct_stop, atr_stop)
 
 
+def hard_stop_price(state: ThesisState, config: BotConfig) -> float | None:
+    """
+    Minimal Bundle 3A hard stop:
+    avg_entry_price * (1 - risk.hard_stop.stop_loss_pct).
+
+    If the new block is absent, preserve the existing initial_stop_price path.
+    """
+    if state.avg_entry_price is None or state.avg_entry_price <= 0:
+        return state.initial_stop_price
+    hard_stop_cfg = config.risk.get("hard_stop", {})
+    stop_loss_pct = hard_stop_cfg.get("stop_loss_pct")
+    if stop_loss_pct is None:
+        return state.initial_stop_price
+    stop_loss_pct = float(stop_loss_pct)
+    if stop_loss_pct <= 0:
+        return state.initial_stop_price
+    return state.avg_entry_price * (1 - stop_loss_pct)
+
+
 def _determine_trailing_pct(profit_from_avg: float, config: BotConfig) -> float:
     ts_cfg = config.risk["trailing_stop"]
     trailing_pct = ts_cfg["default_trailing_pct"]
@@ -66,7 +85,8 @@ def check_stop_triggers(
     """
     if state.current_position_qty <= EPSILON:
         return None
-    if state.initial_stop_price is not None and indicators.adj_close <= state.initial_stop_price:
+    trigger_price = hard_stop_price(state, config)
+    if trigger_price is not None and indicators.adj_close <= trigger_price:
         return "hard_stop"
     if state.trailing_stop_price is not None and indicators.adj_close <= state.trailing_stop_price:
         return "trailing_stop"
