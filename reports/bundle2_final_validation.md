@@ -68,3 +68,27 @@ not activate runner_mode_active, and did not leave a pending IOC order.
 Bundle 3 must not start until the remaining 0.005 BTC testnet exposure is
 cleared, exchange/local state is reconciled, tests pass, and the working tree is
 clean except intentionally deferred files.
+
+## Exposure Cleanup
+
+The remaining 0.005 BTC testnet exposure was cleared before Bundle 3.
+
+Cleanup command:
+
+```text
+python scripts/flatten_hl_position.py --config config/btc_testnet_realistic_probe.yaml --coin BTC --recover-from-target-runner-validation-halt --time-in-force ioc --exit-aggressiveness-bps 100 --max-oracle-deviation-bps 100 --confirm --one-cycle
+```
+
+Cleanup result:
+
+- order_status: filled.
+- reduce_only: true.
+- time_in_force: ioc.
+- filled_qty: 0.005 BTC.
+- avg_fill_px: 72219.0.
+- post_exchange_qty: 0.0.
+- post_open_orders_count: 0.
+- final local state: EXITED.
+- pending_order: null.
+
+Bundle 3 remains gated on tests passing after this report update.
