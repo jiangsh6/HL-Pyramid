@@ -14,24 +14,24 @@ symbol:
 
 thesis:
   enabled: true
-  thesis_name: "BTC momentum thesis — mainnet capped first run"
+  thesis_name: "BTC momentum thesis — mainnet tiny supervised first run"
   thesis_start_date: "2026-01-01"
   target_price: 200000
   manual_override_required_after_expiry: true
 
 capital:
-  starting_equity: 1000
-  max_total_capital_at_risk_pct: 0.06
-  max_symbol_exposure_pct: 1.00
-  max_initial_exposure_pct: 0.20
-  max_starter_exposure_pct: 0.08
-  max_addon_exposure_pct: 0.30
+  starting_equity: 100
+  max_total_capital_at_risk_pct: 0.03
+  max_symbol_exposure_pct: 0.20
+  max_initial_exposure_pct: 0.08
+  max_starter_exposure_pct: 0.04
+  max_addon_exposure_pct: 0.02
   reserve_cash_pct: 0.25
 
 leverage:
-  enabled: true
-  max_leverage: 3.0
-  max_leverage_with_profit_cushion: 5.0
+  enabled: false
+  max_leverage: 1.0
+  max_leverage_with_profit_cushion: 1.0
   profit_cushion_required_pct: 0.10
   earnings_week_max_leverage: 1.0
   force_deleverage_before_event: false
@@ -41,7 +41,7 @@ entry:
 
   starter:
     enabled: true
-    exposure_pct: 0.08
+    exposure_pct: 0.04
     require_thesis_enabled: true
     require_close_above_ma20: true
     max_distance_above_ma10_pct: 0.10
@@ -52,7 +52,7 @@ entry:
 
   pullback_base:
     enabled: true
-    additional_exposure_pct: 0.12
+    additional_exposure_pct: 0.04
     require_close_above_ma20: true
     require_ma20_above_ma50: true
     min_drawdown_from_20d_high_pct: 0.03
@@ -63,7 +63,7 @@ entry:
 
   breakout_base:
     enabled: true
-    additional_exposure_pct: 0.12
+    additional_exposure_pct: 0.04
     require_close_above_20d_high: true
     require_close_above_ma10: true
     require_ma10_above_ma20: true
@@ -81,10 +81,10 @@ add:
   add_trigger_type: price_step
   add_trigger_pct: 0.05
   add_sizes_pct:
-    - 0.08
-    - 0.06
-    - 0.04
     - 0.02
+    - 0.015
+    - 0.01
+    - 0.005
   require_close_above_ma10: true
   require_ma10_above_ma20: true
   require_price_above_last_add_price: true

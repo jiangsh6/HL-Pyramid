@@ -96,6 +96,8 @@ def test_mainnet_config_file_has_conservative_capital_cap():
     raw = yaml.safe_load(Path(MAINNET_CONFIG_PATH).read_text())
     assert raw["mainnet_confirmed"] is True
     assert raw["bot"]["mode"] == "mainnet"
-    assert raw["capital"]["starting_equity"] <= 5000
-    assert raw["capital"]["starting_equity"] == 1000
-    assert raw["capital"]["max_total_capital_at_risk_pct"] == 0.06
+    assert raw["capital"]["starting_equity"] == 100
+    assert raw["capital"]["max_total_capital_at_risk_pct"] == 0.03
+    assert raw["capital"]["max_symbol_exposure_pct"] <= 0.20
+    assert raw["entry"]["starter"]["exposure_pct"] <= 0.04
+    assert raw["leverage"]["enabled"] is False
