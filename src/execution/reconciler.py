@@ -328,6 +328,44 @@ def _refresh_pending_order_from_exchange(
     return pending
 
 
+def _recover_untracked_open_order(
+    state: ThesisState,
+    *,
+    order: HLOpenOrder,
+    coin: str,
+) -> PendingOrder:
+    is_buy = _order_side_is_buy(order)
+    if is_buy:
+        action = ActionType.BUY_ADDON.value if state.current_position_qty > EPSILON else ActionType.BUY_STARTER.value
+        intended_state_after = BotState.PYRAMID_LONG.value if state.current_position_qty > EPSILON else BotState.STARTER_LONG.value
+    else:
+        action = ActionType.EXIT_ALL.value
+        intended_state_after = BotState.EXITED.value
+
+    now = datetime.now(timezone.utc)
+    pending = PendingOrder(
+        oid=order.oid,
+        symbol=coin,
+        action=action,
+        side="buy" if is_buy else "sell",
+        reduce_only=not is_buy,
+        order_type="limit",
+        qty=order.qty,
+        qty_submitted=order.qty,
+        qty_filled=0.0,
+        qty_remaining=order.qty,
+        limit_px=order.limit_px,
+        status="submitted_unfilled",
+        created_at=now,
+        last_checked_at=now,
+        state_before=state.state.value,
+        intended_state_after=intended_state_after,
+        applied_state_after=state.state.value,
+    )
+    state.pending_order = pending
+    return pending
+
+
 def reconcile_state_with_exchange(
     state: ThesisState,
     snapshot: HLAccountSnapshot,
@@ -535,6 +573,17 @@ def reconcile_state_with_exchange(
                 "local_exchange_position_mismatch",
                 exchange_qty=exchange_qty,
                 open_orders_count=len(open_orders),
+            )
+        if state.pending_order is None and open_orders:
+            _recover_untracked_open_order(state, order=open_orders[0], coin=coin)
+            return state, ReconciliationResult(
+                status=ReconciliationStatus.REFRESHED_PENDING_ORDER,
+                reason="recovered_untracked_open_order",
+                exchange_position_qty=exchange_qty,
+                local_position_qty=local_qty,
+                open_orders_count=len(open_orders),
+                pending_order_updated=True,
+                applied_state_after=state.state.value,
             )
         if state.pending_order is not None and open_orders:
             _refresh_pending_order_from_exchange(state, order=open_orders[0], coin=coin)

@@ -208,6 +208,61 @@ def test_pending_open_order_refreshes_pending():
     assert state.pending_order.limit_px == pytest.approx(72390.0)
 
 
+def test_active_position_untracked_exchange_sell_order_recovers_pending_exit():
+    state = ThesisState(symbol="BTC", state=BotState.STARTER_LONG)
+    state.base_lot = LotRecord(
+        lot_id="base",
+        entry_price=72389.0,
+        qty=0.00124,
+        entry_date=date(2026, 5, 31),
+    )
+    state.current_position_qty = 0.00124
+    state.original_base_qty = 0.00124
+    state.avg_entry_price = 72389.0
+    order = HLOpenOrder(oid=456, coin="BTC", side="A", qty=0.00124, limit_px=72000.0)
+
+    state, result = reconcile_state_with_exchange(
+        state, _snapshot(position_qty=0.00124, open_orders=[order]), [], _cfg()
+    )
+
+    assert result.status == ReconciliationStatus.REFRESHED_PENDING_ORDER
+    assert result.reason == "recovered_untracked_open_order"
+    assert state.state == BotState.STARTER_LONG
+    assert state.current_position_qty == pytest.approx(0.00124)
+    assert state.pending_order is not None
+    assert state.pending_order.oid == 456
+    assert state.pending_order.action == "exit_all"
+    assert state.pending_order.side == "sell"
+    assert state.pending_order.reduce_only is True
+
+
+def test_active_position_untracked_exchange_buy_order_recovers_pending_add():
+    state = ThesisState(symbol="BTC", state=BotState.BASE_LONG)
+    state.base_lot = LotRecord(
+        lot_id="base",
+        entry_price=72389.0,
+        qty=0.00124,
+        entry_date=date(2026, 5, 31),
+    )
+    state.current_position_qty = 0.00124
+    state.original_base_qty = 0.00124
+    state.avg_entry_price = 72389.0
+    order = HLOpenOrder(oid=789, coin="BTC", side="B", qty=0.001, limit_px=72450.0)
+
+    state, result = reconcile_state_with_exchange(
+        state, _snapshot(position_qty=0.00124, open_orders=[order]), [], _cfg()
+    )
+
+    assert result.status == ReconciliationStatus.REFRESHED_PENDING_ORDER
+    assert result.reason == "recovered_untracked_open_order"
+    assert state.state == BotState.BASE_LONG
+    assert state.pending_order is not None
+    assert state.pending_order.oid == 789
+    assert state.pending_order.action == "buy_addon"
+    assert state.pending_order.side == "buy"
+    assert state.pending_order.reduce_only is False
+
+
 def test_pending_missing_on_exchange_matching_fill_reconstructs():
     pending = PendingOrder(
         oid=123,
