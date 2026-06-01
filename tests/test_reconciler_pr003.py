@@ -9,7 +9,7 @@ import pytest
 
 from scripts import run_live_hl as live_script
 from src.core.config_loader import load_config
-from src.core.models import BotState, LotRecord, PendingOrder, ReconciliationStatus, ThesisState
+from src.core.models import ActionType, BotState, LotRecord, PendingOrder, ReconciliationStatus, ThesisState
 from src.execution.reconciler import reconcile_state_with_exchange
 from src.hl.account import HLAccountSnapshot, HLFill, HLOpenOrder, HLPosition
 from src.reporting.state_writer import read_state
@@ -306,6 +306,67 @@ def test_pending_missing_on_exchange_no_fill_halts():
 
     assert result.status == ReconciliationStatus.HALTED
     assert state.halt_reason == "pending_order_missing_on_exchange"
+
+
+def test_pending_add_missing_on_exchange_split_fills_apply_single_addon_lot():
+    pending = PendingOrder(
+        oid=54110259097,
+        symbol="BTC",
+        action=ActionType.BUY_ADDON.value,
+        side="buy",
+        qty=0.005,
+        qty_remaining=0.005,
+        limit_px=71245.0,
+        status="submitted_unfilled",
+        created_at=datetime.now(timezone.utc),
+        state_before=BotState.RUNNER_LONG.value,
+        intended_state_after=BotState.PYRAMID_LONG.value,
+    )
+    state = ThesisState(
+        symbol="BTC",
+        state=BotState.RUNNER_LONG,
+        pending_order=pending,
+        halted=True,
+        halt_reason="pending_entry_missing_on_exchange",
+    )
+    state.base_lot = LotRecord(
+        lot_id="base",
+        entry_price=71500.0,
+        qty=0.005,
+        entry_date=date(2026, 6, 1),
+    )
+    state.current_position_qty = 0.005
+    state.original_base_qty = 0.005
+    state.avg_entry_price = 71500.0
+    state.add_count = 0
+
+    fills = [
+        _fill(0.00161, 71245.0, oid=54110259097, ts=1_800_000_000_001),
+        _fill(0.00209, 71245.0, oid=54110259097, ts=1_800_000_000_002),
+        _fill(0.00130, 71245.0, oid=54110259097, ts=1_800_000_000_003),
+    ]
+    state, result = reconcile_state_with_exchange(
+        state,
+        _snapshot(position_qty=0.010),
+        fills,
+        _cfg(),
+    )
+
+    assert result.status == ReconciliationStatus.CLEARED_PENDING_ORDER
+    assert result.reason == "cleared_filled_opening_pending_order"
+    assert result.matched_fill_count == 3
+    assert state.state == BotState.PYRAMID_LONG
+    assert state.halted is False
+    assert state.halt_reason is None
+    assert state.pending_order is None
+    assert state.current_position_qty == pytest.approx(0.010)
+    assert state.base_lot is not None
+    assert state.base_lot.qty == pytest.approx(0.005)
+    assert len(state.addon_lots) == 1
+    assert state.addon_lots[0].qty == pytest.approx(0.005)
+    assert state.addon_lots[0].entry_price == pytest.approx(71245.0)
+    assert state.add_count == 1
+    assert state.avg_entry_price == pytest.approx((0.005 * 71500.0 + 0.005 * 71245.0) / 0.010)
 
 
 def test_local_long_exchange_same_qty_ok():

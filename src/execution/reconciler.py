@@ -16,7 +16,7 @@ from src.core.models import (
     ReconciliationStatus,
     ThesisState,
 )
-from src.execution.lifecycle import EMERGENCY_EXIT_ACTIONS, OPENING_ACTIONS, RISK_REDUCING_ACTIONS
+from src.execution.lifecycle import ADDING_ACTIONS, EMERGENCY_EXIT_ACTIONS, OPENING_ACTIONS, RISK_REDUCING_ACTIONS
 from src.execution.operator_recovery import pending_action_to_action_type
 from src.execution.utils import compute_realized_pnl_lifo
 from src.hl.account import HLAccountSnapshot, HLFill, HLOpenOrder
@@ -79,6 +79,12 @@ def _fill_date(fill: HLFill) -> date:
     if fill.timestamp_ms is None:
         return datetime.now(timezone.utc).date()
     return datetime.fromtimestamp(fill.timestamp_ms / 1000, tz=timezone.utc).date()
+
+
+def _fill_datetime(fill: HLFill) -> datetime:
+    if fill.timestamp_ms is None:
+        return datetime.now(timezone.utc)
+    return datetime.fromtimestamp(fill.timestamp_ms / 1000, tz=timezone.utc)
 
 
 def _coerce_fill(fill: HLFill | dict[str, Any]) -> Optional[HLFill]:
@@ -189,23 +195,38 @@ def _match_recent_reducing_fills(
     return selected
 
 
-def _has_pending_open_fill_evidence(
+def _match_pending_open_fills(
     fills: Iterable[HLFill],
     *,
     coin: str,
     pending_order: PendingOrder,
     local_qty: float,
     exchange_qty: float,
-) -> bool:
-    if abs(local_qty - exchange_qty) > EPSILON:
-        return False
-    matched = _match_recent_opening_fills(
+) -> Optional[List[HLFill]]:
+    target_qty = exchange_qty - local_qty
+    if target_qty <= EPSILON:
+        return None
+    return _match_recent_opening_fills(
         fills,
         coin=coin,
-        target_qty=local_qty,
+        target_qty=target_qty,
         pending_order=pending_order,
     )
-    return matched is not None
+
+
+def _aggregate_opening_fills(action: ActionType, fills: List[HLFill]) -> Fill:
+    total_qty = sum(fill.qty for fill in fills)
+    weighted_price = sum(fill.qty * fill.price for fill in fills) / total_qty
+    latest = sorted(fills, key=_fill_time)[-1]
+    return Fill(
+        action=action,
+        qty=total_qty,
+        fill_price=weighted_price,
+        slippage_bps=0.0,
+        timestamp=_fill_datetime(latest),
+        order_id=latest.oid,
+        order_status="filled",
+    )
 
 
 def _reconstruct_position_from_fills(
@@ -482,23 +503,36 @@ def reconcile_state_with_exchange(
                     exchange_qty=exchange_qty,
                     open_orders_count=0,
                 )
-            if pending_action in OPENING_ACTIONS:
-                if _has_pending_open_fill_evidence(
+            if pending_action in (OPENING_ACTIONS | ADDING_ACTIONS):
+                matched_open_fills = _match_pending_open_fills(
                     typed_fills,
                     coin=coin,
                     pending_order=state.pending_order,
-                    local_qty=state.current_position_qty,
+                    local_qty=local_qty,
                     exchange_qty=max(exchange_qty, 0.0),
-                ):
+                )
+                if matched_open_fills:
+                    apply_fill(
+                        state,
+                        _aggregate_opening_fills(pending_action, matched_open_fills),
+                    )
+                    if pending_action == ActionType.BUY_STARTER:
+                        state.state = BotState.STARTER_LONG
+                    elif pending_action == ActionType.BUY_BASE:
+                        state.state = BotState.BASE_LONG
+                    elif pending_action == ActionType.BUY_ADDON:
+                        state.state = BotState.PYRAMID_LONG
+                    state.halted = False
+                    state.halt_reason = None
                     state.pending_order = None
                     mark_to_market_state(state, mark_price or state.avg_entry_price or 0.0)
                     return state, ReconciliationResult(
                         status=ReconciliationStatus.CLEARED_PENDING_ORDER,
                         reason="cleared_filled_opening_pending_order",
                         exchange_position_qty=exchange_qty,
-                        local_position_qty=local_qty,
+                        local_position_qty=state.current_position_qty,
                         open_orders_count=0,
-                        matched_fill_count=1,
+                        matched_fill_count=len(matched_open_fills),
                         pending_order_updated=True,
                         applied_state_after=state.state.value,
                     )

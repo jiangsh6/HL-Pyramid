@@ -327,27 +327,41 @@ def main() -> int:
             collateral_mode=hl_cfg.get("collateral_mode", "unified"),
         )
         if ok:
-            state.pending_order = None
-            if pending.action in {"buy_starter", "buy_base", "buy_addon"} and exchange_qty <= EPSILON:
-                state.state = BotState.FLAT
-                state.halted = False
-                state.halt_reason = None
-            elif pending.action in {"sell_reduce_addon", "sell_reduce_base", "sell_take_profit", "sell_event_derisking"}:
-                state.halted = False
-                state.halt_reason = None
-            elif pending.action == DUST_EXIT_PENDING_ACTION:
-                state.state = BotState.HALTED
-                state.halted = True
-                state.halt_reason = "dust_exit_order_canceled_position_still_open"
+            post_recent_fills = get_recent_user_fills(wallet, client)
+            post_fills_for_oid = [fill for fill in post_recent_fills if fill.oid == args.oid]
+            if post_fills_for_oid:
+                state, reconciliation = reconcile_state_with_exchange(
+                    state,
+                    post,
+                    post_recent_fills,
+                    config,
+                )
+            if reconciliation.status == ReconciliationStatus.CLEARED_PENDING_ORDER:
+                risk_status = "reconciled"
+                result_text = "cancel_success_reconciled_fills"
             else:
-                state.state = BotState.HALTED
-                state.halted = True
-                state.halt_reason = "exit_order_canceled_position_still_open"
-            mark_to_market_state(state, mark_price)
+                state.pending_order = None
+                if pending.action in {"buy_starter", "buy_base", "buy_addon"} and exchange_qty <= EPSILON:
+                    state.state = BotState.FLAT
+                    state.halted = False
+                    state.halt_reason = None
+                elif pending.action in {"sell_reduce_addon", "sell_reduce_base", "sell_take_profit", "sell_event_derisking"}:
+                    state.halted = False
+                    state.halt_reason = None
+                elif pending.action == DUST_EXIT_PENDING_ACTION:
+                    state.state = BotState.HALTED
+                    state.halted = True
+                    state.halt_reason = "dust_exit_order_canceled_position_still_open"
+                else:
+                    state.state = BotState.HALTED
+                    state.halted = True
+                    state.halt_reason = "exit_order_canceled_position_still_open"
+                mark_to_market_state(state, mark_price)
+                risk_status = "halted"
+                result_text = "cancel_success"
             status = OrderResultStatus.CANCELED
-            risk_status = "halted"
             print("ACTION=cancel_oid")
-            print("result=cancel_success")
+            print("result=" + result_text)
         else:
             state.state = BotState.HALTED
             state.halted = True
