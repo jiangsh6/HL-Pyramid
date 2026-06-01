@@ -216,6 +216,25 @@ def format_event(event: Mapping[str, Any]) -> str:
             f"summary={_value(event.get('summary'))}",
         ])
 
+    if event_type == "weekly_summary":
+        return "\n".join([
+            "HL weekly summary",
+            "event=weekly_summary",
+            f"timestamp={timestamp}",
+            f"run_id={_semantic_value(event.get('run_id'))}",
+            f"network={_semantic_value(event.get('network'))}",
+            f"week_start={_semantic_value(event.get('week_start'))}",
+            f"week_end={_semantic_value(event.get('week_end'))}",
+            f"current_state={_semantic_value(event.get('current_state'))}",
+            f"local_position_qty={_semantic_value(event.get('local_position_qty'))}",
+            f"exchange_position_qty={_semantic_value(event.get('exchange_position_qty'))}",
+            f"starting_equity={_semantic_value(event.get('starting_equity'))}",
+            f"ending_equity={_semantic_value(event.get('ending_equity'))}",
+            f"weekly_pnl={_semantic_value(event.get('weekly_pnl'))}",
+            f"trade_count={_semantic_value(event.get('trade_count'))}",
+            f"reconciliation_status={_semantic_value(event.get('reconciliation_status'))}",
+        ])
+
     if event_type == "semantic":
         return "\n".join([
             "HL semantic",

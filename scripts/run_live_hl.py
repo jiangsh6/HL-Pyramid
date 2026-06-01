@@ -15,13 +15,14 @@ and the intraday monitor thread within a few seconds.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import signal
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -443,6 +444,8 @@ def _dedupe_key(event: dict) -> Optional[str]:
             "action",
             "oid",
             "order_id",
+            "week_start",
+            "week_end",
             "state",
             "halt_reason",
             "reason",
@@ -488,10 +491,10 @@ def _notify_if_enabled(
     notifier: TelegramNotifier,
     toggle: Optional[str],
     event: dict,
-) -> None:
+) -> bool:
     enabled = _safety_alert_enabled(config) if toggle is None else alert_toggle_enabled(config.notifications or {}, toggle)
     if not enabled:
-        return
+        return False
     event = dict(event)
     if _alert_recently_sent(event):
         _log.info(
@@ -500,11 +503,12 @@ def _notify_if_enabled(
             event.get("event"),
             event.get("status"),
         )
-        return
+        return False
     try:
-        notify_event(notifier, event)
+        return notify_event(notifier, event)
     except Exception as exc:  # noqa: BLE001
         _log.warning("telegram_notify_failed=true error_type=%s", type(exc).__name__)
+        return False
 
 
 def _notify_safety(
@@ -698,6 +702,82 @@ def _notify_summary(
             "summary": summary[:3000],
         },
     )
+
+
+def _weekly_summary_state_path(config: BotConfig) -> Path:
+    run_dir = Path(config.logging.get("run_dir", "reports/btc_hl_testnet"))
+    return run_dir / "telegram_weekly_summary_state.json"
+
+
+def _week_bounds(today: Optional[date] = None) -> tuple[str, str, str]:
+    current = today or datetime.now(timezone.utc).date()
+    week_start = current - timedelta(days=current.weekday())
+    week_end = week_start + timedelta(days=6)
+    week_key = week_start.isoformat()
+    return week_key, week_start.isoformat(), week_end.isoformat()
+
+
+def _last_sent_week(config: BotConfig) -> Optional[str]:
+    path = _weekly_summary_state_path(config)
+    if not path.exists():
+        return None
+    try:
+        raw = json.loads(path.read_text())
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("weekly_summary_state_read_failed=true error_type=%s", type(exc).__name__)
+        return None
+    value = raw.get("last_sent_week") if isinstance(raw, dict) else None
+    return str(value) if value else None
+
+
+def _record_sent_week(config: BotConfig, week_key: str) -> None:
+    path = _weekly_summary_state_path(config)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"last_sent_week": week_key}, indent=2))
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("weekly_summary_state_write_failed=true error_type=%s", type(exc).__name__)
+
+
+def _notify_weekly_summary(
+    *,
+    config: BotConfig,
+    notifier: TelegramNotifier,
+    state: ThesisState,
+    exchange_position_qty: Optional[float] = None,
+    ending_equity: Optional[float] = None,
+    reconciliation_status: Optional[str] = None,
+    today: Optional[date] = None,
+) -> bool:
+    if not alert_toggle_enabled(config.notifications or {}, "weekly_summary_enabled"):
+        return False
+    week_key, week_start, week_end = _week_bounds(today)
+    if _last_sent_week(config) == week_key:
+        return False
+    sent = _notify_if_enabled(
+        config=config,
+        notifier=notifier,
+        toggle="weekly_summary_enabled",
+        event={
+            "type": "weekly_summary",
+            "event": "weekly_summary",
+            "run_id": _run_id(config),
+            "network": _network(config),
+            "week_start": week_start,
+            "week_end": week_end,
+            "current_state": state.state.value,
+            "local_position_qty": state.current_position_qty,
+            "exchange_position_qty": exchange_position_qty,
+            "starting_equity": None,
+            "ending_equity": ending_equity,
+            "weekly_pnl": None,
+            "trade_count": None,
+            "reconciliation_status": reconciliation_status,
+        },
+    )
+    if sent:
+        _record_sent_week(config, week_key)
+    return sent
 
 
 def _snapshot_position_qty(snapshot, coin: str) -> Optional[float]:  # noqa: ANN001
@@ -1447,6 +1527,14 @@ def run_decision_cycle(
             coin=coin,
             summary=summary,
             exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
+        )
+        _notify_weekly_summary(
+            config=config,
+            notifier=notifier,
+            state=state,
+            exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
+            ending_equity=equity,
+            reconciliation_status="ok" if hl_snapshot is not None else None,
         )
     except Exception as exc:  # noqa: BLE001
         _log.error("daily summary generation failed: %s", exc)

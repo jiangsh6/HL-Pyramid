@@ -226,6 +226,7 @@ notifications:
   heartbeat_enabled: false
   trade_alerts_enabled: false
   decision_alerts_enabled: false
+  weekly_summary_enabled: false
   notify_on:
   - entry
   - add
