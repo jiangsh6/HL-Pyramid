@@ -198,7 +198,11 @@ def test_flatten_blocks_dust_before_order_and_writes_logs(tmp_path, monkeypatch)
 def test_ioc_flatten_recovery_unfilled_leaves_no_pending_order(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     state_path = tmp_path / "state.json"
-    write_state(_target_runner_halted_state(), str(state_path))
+    state = _target_runner_halted_state()
+    state.state = BotState.BASE_LONG
+    state.halted = False
+    state.halt_reason = None
+    write_state(state, str(state_path))
 
     def fake_execute(decision, state, config, client, wallet, private_key, mark_price):
         assert config.execution["time_in_force"] == "ioc"
@@ -363,6 +367,202 @@ def test_flatten_aggressiveness_alias_overrides_legacy_aggressiveness(tmp_path, 
 
     assert observed["aggr"] == pytest.approx(10.0)
     assert "exit_aggressiveness_bps=10.0" in capsys.readouterr().out
+
+
+def test_marketable_exit_reference_sell_crosses_best_bid():
+    class FakeClient:
+        def post_info(self, payload):
+            assert payload == {"type": "l2Book", "coin": "BTC"}
+            return {"levels": [[{"px": "71000.0"}], [{"px": "71010.0"}]]}
+
+    px, best_bid, best_ask = flatten_hl_position._marketable_exit_reference_price(
+        FakeClient(),
+        coin="BTC",
+        side="sell",
+        cross_bps=10,
+    )
+
+    assert best_bid == pytest.approx(71000.0)
+    assert best_ask == pytest.approx(71010.0)
+    assert px == pytest.approx(70929.0)
+    assert px < best_bid
+
+
+def test_marketable_exit_reference_buy_crosses_best_ask():
+    class FakeClient:
+        def post_info(self, payload):
+            assert payload == {"type": "l2Book", "coin": "BTC"}
+            return {"levels": [[["71000.0", "0.1"]], [["71010.0", "0.1"]]]}
+
+    px, best_bid, best_ask = flatten_hl_position._marketable_exit_reference_price(
+        FakeClient(),
+        coin="BTC",
+        side="buy",
+        cross_bps=10,
+    )
+
+    assert best_bid == pytest.approx(71000.0)
+    assert best_ask == pytest.approx(71010.0)
+    assert px == pytest.approx(71081.01)
+    assert px > best_ask
+
+
+def test_marketable_from_book_requires_ioc(tmp_path, monkeypatch, capsys):
+    cfg = _cfg(tmp_path)
+    state_path = tmp_path / "state.json"
+    write_state(_target_runner_halted_state(), str(state_path))
+    executed = {"called": False}
+
+    monkeypatch.setattr(flatten_hl_position, "load_config", lambda *_: cfg)
+    monkeypatch.setattr(flatten_hl_position, "get_private_key", lambda *_: "secret")
+    monkeypatch.setattr(flatten_hl_position, "HyperliquidClient", lambda **_: object())
+    monkeypatch.setattr(flatten_hl_position, "get_account_snapshot", lambda *a, **kw: _snapshot(position_qty=0.005))
+    monkeypatch.setattr(flatten_hl_position, "get_recent_user_fills", lambda *a, **kw: [])
+    monkeypatch.setattr(flatten_hl_position, "execute_hl", lambda *a, **kw: executed.__setitem__("called", True))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "flatten_hl_position.py",
+            "--config",
+            "ignored.yaml",
+            "--coin",
+            "BTC",
+            "--recover-from-target-runner-validation-halt",
+            "--marketable-from-book",
+            "--confirm",
+            "--one-cycle",
+        ],
+    )
+
+    rc = flatten_hl_position.main()
+
+    assert rc == 1
+    assert executed["called"] is False
+    assert "STOPPED_BEFORE_EXIT: marketable_from_book_requires_ioc" in capsys.readouterr().out
+
+
+def test_ioc_marketable_from_book_uses_bid_reference_and_emergency_cap(tmp_path, monkeypatch, capsys):
+    cfg = _cfg(tmp_path)
+    state_path = tmp_path / "state.json"
+    write_state(_target_runner_halted_state(), str(state_path))
+    observed: dict[str, float | str | bool] = {}
+
+    class FakeClient:
+        def post_info(self, payload):
+            assert payload == {"type": "l2Book", "coin": "BTC"}
+            return {"levels": [[{"px": "71050.0"}], [{"px": "71060.0"}]]}
+
+    def fake_execute(decision, state, config, client, wallet, private_key, mark_price):
+        assert decision.action == ActionType.EXIT_ALL
+        observed["mark_price"] = mark_price
+        observed["tif"] = config.execution["time_in_force"]
+        observed["aggr"] = config.execution["exit_price_aggressiveness_bps"]
+        observed["max_bps"] = config.execution["max_oracle_deviation_bps"]
+        return OrderResult(
+            status=OrderResultStatus.SUBMITTED_UNFILLED,
+            action=ActionType.EXIT_ALL,
+            side="sell",
+            reduce_only=True,
+            submitted_qty=decision.qty,
+            filled_qty=0.0,
+            remaining_qty=decision.qty,
+            limit_px=mark_price,
+            raw_status_sanitized="ioc_no_match",
+            state_before=state.state.value,
+            intended_state_after=BotState.EXITED.value,
+            applied_state_after=state.state.value,
+            created_at=datetime.now(timezone.utc),
+        )
+
+    monkeypatch.setattr(flatten_hl_position, "load_config", lambda *_: cfg)
+    monkeypatch.setattr(flatten_hl_position, "get_private_key", lambda *_: "secret")
+    monkeypatch.setattr(flatten_hl_position, "HyperliquidClient", lambda **_: FakeClient())
+    monkeypatch.setattr(flatten_hl_position, "get_account_snapshot", lambda *a, **kw: _snapshot(position_qty=0.005))
+    monkeypatch.setattr(flatten_hl_position, "get_recent_user_fills", lambda *a, **kw: [])
+    monkeypatch.setattr(flatten_hl_position, "execute_hl", fake_execute)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "flatten_hl_position.py",
+            "--config",
+            "ignored.yaml",
+            "--coin",
+            "BTC",
+            "--recover-from-target-runner-validation-halt",
+            "--time-in-force",
+            "ioc",
+            "--aggressiveness-bps",
+            "10",
+            "--marketable-from-book",
+            "--allow-emergency-deviation-bps",
+            "25",
+            "--confirm",
+            "--one-cycle",
+        ],
+    )
+
+    rc = flatten_hl_position.main()
+
+    persisted = read_state(str(state_path))
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert observed["mark_price"] == pytest.approx(70978.95)
+    assert observed["tif"] == "ioc"
+    assert observed["aggr"] == pytest.approx(0.0)
+    assert observed["max_bps"] == pytest.approx(25.0)
+    assert persisted.pending_order is None
+    assert persisted.halt_reason == "ioc_flatten_unfilled_position_still_open"
+    assert "marketable_from_book=True" in out
+    assert "book_best_bid=71050.0" in out
+    assert "max_deviation_bps=25.0" in out
+
+
+def test_marketable_from_book_refuses_mainnet_even_with_recovery_gates(tmp_path, monkeypatch, capsys):
+    cfg = _cfg(tmp_path)
+    cfg.bot["mode"] = "mainnet"
+    cfg.bot["mainnet_confirmed"] = True
+    cfg.hl["network"] = "mainnet"
+    state_path = tmp_path / "state.json"
+    state = _target_runner_halted_state()
+    state.state = BotState.BASE_LONG
+    state.halted = False
+    state.halt_reason = None
+    write_state(state, str(state_path))
+    executed = {"called": False}
+
+    monkeypatch.setenv("HL_ALLOW_MAINNET", "true")
+    monkeypatch.setattr(flatten_hl_position, "load_config", lambda *_: cfg)
+    monkeypatch.setattr(flatten_hl_position, "get_private_key", lambda *_: "secret")
+    monkeypatch.setattr(flatten_hl_position, "HyperliquidClient", lambda **_: object())
+    monkeypatch.setattr(flatten_hl_position, "get_account_snapshot", lambda *a, **kw: _snapshot(position_qty=0.005))
+    monkeypatch.setattr(flatten_hl_position, "get_recent_user_fills", lambda *a, **kw: [])
+    monkeypatch.setattr(flatten_hl_position, "execute_hl", lambda *a, **kw: executed.__setitem__("called", True))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "flatten_hl_position.py",
+            "--config",
+            "ignored.yaml",
+            "--coin",
+            "BTC",
+            "--mainnet",
+            "--recover-from-target-runner-validation-halt",
+            "--time-in-force",
+            "ioc",
+            "--marketable-from-book",
+            "--confirm",
+            "--one-cycle",
+        ],
+    )
+
+    rc = flatten_hl_position.main()
+
+    assert rc == 1
+    assert executed["called"] is False
+    assert "STOPPED_BEFORE_EXIT: marketable_from_book_testnet_only" in capsys.readouterr().out
 
 
 def test_reset_state_refuses_local_position(tmp_path, monkeypatch, capsys):

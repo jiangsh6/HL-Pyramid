@@ -17,6 +17,7 @@ import argparse
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
+from typing import Any
 
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
@@ -124,6 +125,46 @@ def _synthetic_indicators(mark_price: float) -> IndicatorSnapshot:
         close=mark_price,
         bar_time=datetime.now(timezone.utc),
     )
+
+
+def _coerce_l2_px(level: Any) -> float:
+    if isinstance(level, dict):
+        value = level.get("px")
+    elif isinstance(level, (list, tuple)) and level:
+        value = level[0]
+    else:
+        raise ValueError(f"unsupported l2Book level format: {level!r}")
+    px = float(value)
+    if px <= 0:
+        raise ValueError(f"l2Book price must be > 0: {value!r}")
+    return px
+
+
+def _extract_best_bid_ask(book: dict[str, Any]) -> tuple[float, float]:
+    levels = book.get("levels")
+    if not isinstance(levels, list) or len(levels) < 2:
+        raise ValueError("l2Book response missing bid/ask levels")
+    bids, asks = levels[0], levels[1]
+    if not bids or not asks:
+        raise ValueError("l2Book response has empty bid or ask side")
+    return _coerce_l2_px(bids[0]), _coerce_l2_px(asks[0])
+
+
+def _marketable_exit_reference_price(
+    client,
+    *,
+    coin: str,
+    side: str,
+    cross_bps: float,
+) -> tuple[float, float, float]:
+    book = client.post_info({"type": "l2Book", "coin": coin})
+    best_bid, best_ask = _extract_best_bid_ask(book)
+    bps = max(float(cross_bps), 0.0)
+    if side.lower() == "sell":
+        return best_bid * (1.0 - bps / 10_000.0), best_bid, best_ask
+    if side.lower() == "buy":
+        return best_ask * (1.0 + bps / 10_000.0), best_bid, best_ask
+    raise ValueError(f"unsupported exit side: {side}")
 
 
 def _pending_from_order_result(state, decision: Decision, order_result) -> PendingOrder:
@@ -307,6 +348,17 @@ def main() -> int:
     parser.add_argument("--aggressiveness-bps", type=float, default=None)
     parser.add_argument("--exit-aggressiveness-bps", type=float, default=None)
     parser.add_argument("--max-oracle-deviation-bps", type=float, default=None)
+    parser.add_argument(
+        "--marketable-from-book",
+        action="store_true",
+        help="Probe-only: price IOC reduce-only cleanup from live l2Book best bid.",
+    )
+    parser.add_argument(
+        "--allow-emergency-deviation-bps",
+        type=float,
+        default=None,
+        help="Probe-only: explicit IOC cleanup oracle-deviation override for marketable-from-book.",
+    )
     parser.add_argument("--mainnet", action="store_true")
     args = parser.parse_args()
 
@@ -517,20 +569,52 @@ def main() -> int:
     if args.force_ioc_no_match_validation and time_in_force.lower() != "ioc":
         print("STOPPED_BEFORE_EXIT: no_match_validation_requires_ioc")
         return 1
+    if args.marketable_from_book and time_in_force.lower() != "ioc":
+        print("STOPPED_BEFORE_EXIT: marketable_from_book_requires_ioc")
+        return 1
+    if args.marketable_from_book and str(network) != "testnet":
+        print("STOPPED_BEFORE_EXIT: marketable_from_book_testnet_only")
+        return 1
+    if args.allow_emergency_deviation_bps is not None:
+        if not args.marketable_from_book or time_in_force.lower() != "ioc":
+            print("STOPPED_BEFORE_EXIT: emergency_deviation_requires_marketable_ioc")
+            return 1
+        max_oracle_bps = float(args.allow_emergency_deviation_bps)
     pricing_mark_price = mark_price * 1.05 if args.force_ioc_no_match_validation else mark_price
+    pricing_aggr_bps = exit_aggr_bps
+    book_best_bid = None
+    book_best_ask = None
+    if args.marketable_from_book:
+        try:
+            pricing_mark_price, book_best_bid, book_best_ask = _marketable_exit_reference_price(
+                client,
+                coin=coin,
+                side="sell",
+                cross_bps=exit_aggr_bps,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print("STOPPED_BEFORE_EXIT: marketable_book_lookup_failed:" + str(exc))
+            return 1
+        pricing_aggr_bps = 0.0
     price_info = compute_oracle_safe_exit_price(
         "sell",
         pricing_mark_price,
         None,
         sz_decimals,
         max_oracle_bps,
-        exit_aggr_bps,
+        pricing_aggr_bps,
     )
     print("mark_oracle_proxy=" + str(price_info.oracle_price))
+    print("marketable_from_book=" + str(args.marketable_from_book))
+    if args.marketable_from_book:
+        print("book_best_bid=" + str(book_best_bid))
+        print("book_best_ask=" + str(book_best_ask))
+        print("book_marketable_reference_px=" + str(pricing_mark_price))
     print("raw_exit_px=" + str(price_info.raw_exit_px))
     print("formatted_exit_px=" + str(price_info.formatted_exit_px))
     print("max_deviation_bps=" + str(price_info.max_deviation_bps))
     print("exit_aggressiveness_bps=" + str(exit_aggr_bps))
+    print("pricing_aggressiveness_bps=" + str(pricing_aggr_bps))
     print("time_in_force=" + time_in_force)
     print("force_ioc_no_match_validation=" + str(args.force_ioc_no_match_validation))
 
@@ -538,7 +622,7 @@ def main() -> int:
     execution_cfg.update(
         {
             "time_in_force": time_in_force,
-            "exit_price_aggressiveness_bps": exit_aggr_bps,
+            "exit_price_aggressiveness_bps": pricing_aggr_bps,
             "max_oracle_deviation_bps": max_oracle_bps,
         }
     )
