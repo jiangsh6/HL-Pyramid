@@ -361,6 +361,69 @@ def test_event_risk_force_flat_unfilled_halts(tmp_path, monkeypatch):
     assert persisted.current_position_qty == pytest.approx(0.00124)
 
 
+def test_emergency_exit_ioc_unfilled_halts_without_pending_order(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    cfg.execution["time_in_force"] = "ioc"
+    state = _state()
+    decision = Decision(action=ActionType.EXIT_ALL, qty=0.00124, reason="operator_emergency_exit", new_state=BotState.EXITED)
+    _patch_cycle(monkeypatch, _snapshot(), decision, _result(ActionType.EXIT_ALL, OrderResultStatus.SUBMITTED_UNFILLED))
+
+    status = _run(tmp_path, cfg, state)
+    persisted = read_state(str(tmp_path / "state.json"))
+    assert status == live_script.HALTED
+    assert persisted.state == BotState.HALTED
+    assert persisted.current_position_qty == pytest.approx(0.00124)
+    assert persisted.pending_order is None
+    assert persisted.halt_reason == "ioc_emergency_exit_unfilled"
+
+
+def test_emergency_exit_ioc_partial_fill_applies_only_fill_and_halts_without_pending(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    cfg.execution["time_in_force"] = "ioc"
+    state = _state()
+    decision = Decision(action=ActionType.EXIT_ALL, qty=0.00124, reason="operator_emergency_exit", new_state=BotState.EXITED)
+    _patch_cycle(monkeypatch, _snapshot(), decision, _result(ActionType.EXIT_ALL, OrderResultStatus.PARTIALLY_FILLED, filled=0.0005, remaining=0.00074))
+
+    status = _run(tmp_path, cfg, state)
+    persisted = read_state(str(tmp_path / "state.json"))
+    assert status == live_script.HALTED
+    assert persisted.state == BotState.HALTED
+    assert persisted.current_position_qty == pytest.approx(0.00074)
+    assert persisted.pending_order is None
+    assert persisted.halt_reason == "ioc_emergency_exit_partial_residual"
+
+
+def test_emergency_exit_rejected_halts_without_false_exit(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    state = _state()
+    decision = Decision(action=ActionType.EXIT_ALL, qty=0.00124, reason="operator_emergency_exit", new_state=BotState.EXITED)
+    result = _result(ActionType.EXIT_ALL, OrderResultStatus.REJECTED)
+    result.exchange_error_sanitized = "test_rejection"
+    _patch_cycle(monkeypatch, _snapshot(), decision, result)
+
+    status = _run(tmp_path, cfg, state)
+    persisted = read_state(str(tmp_path / "state.json"))
+    assert status == live_script.HALTED
+    assert persisted.state == BotState.HALTED
+    assert persisted.current_position_qty == pytest.approx(0.00124)
+    assert persisted.pending_order is None
+    assert persisted.halt_reason == "risk_reducing_order_rejected:test_rejection"
+
+
+def test_emergency_exit_full_fill_exits(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    state = _state()
+    decision = Decision(action=ActionType.EXIT_ALL, qty=0.00124, reason="operator_emergency_exit", new_state=BotState.EXITED)
+    _patch_cycle(monkeypatch, _snapshot(), decision, _result(ActionType.EXIT_ALL, OrderResultStatus.FILLED, filled=0.00124, remaining=0.0))
+
+    status = _run(tmp_path, cfg, state)
+    persisted = read_state(str(tmp_path / "state.json"))
+    assert status == live_script.CONTINUE
+    assert persisted.state == BotState.EXITED
+    assert persisted.current_position_qty == 0.0
+    assert persisted.pending_order is None
+
+
 def test_pending_reduce_blocks_add(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     state = _state()

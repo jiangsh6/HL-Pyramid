@@ -254,6 +254,10 @@ def _build_pending_order(
     )
 
 
+def _is_ioc_execution(config: BotConfig) -> bool:
+    return str((config.execution or {}).get("time_in_force", "gtc")).strip().lower() == "ioc"
+
+
 def _normalize_dispatch_result(
     result,
     decision: Decision,
@@ -637,7 +641,11 @@ def run_decision_cycle(
                 return CONTINUE
 
             if is_unfilled_emergency_exit(order_result):
-                state.pending_order = _build_pending_order(state, decision, order_result)
+                is_ioc_exit = _is_ioc_execution(config)
+                state.pending_order = (
+                    None if is_ioc_exit and decision.action != ActionType.SELL_STOP
+                    else _build_pending_order(state, decision, order_result)
+                )
                 if decision.action == ActionType.SELL_STOP:
                     state.state = BotState(state_before)
                     state.halted = False
@@ -645,7 +653,7 @@ def run_decision_cycle(
                 else:
                     state.state = BotState.HALTED
                     state.halted = True
-                    state.halt_reason = "unfilled_emergency_exit"
+                    state.halt_reason = "ioc_emergency_exit_unfilled" if is_ioc_exit else "unfilled_emergency_exit"
                 order_result.applied_state_after = state.state.value
                 write_state(state, str(state_path))
                 _log_cycle_safely(
@@ -706,14 +714,21 @@ def run_decision_cycle(
                     action_class == ActionClass.EMERGENCY_EXIT
                     and state.current_position_qty > 1e-9
                 ):
+                    is_ioc_exit = _is_ioc_execution(config)
                     if decision.action == ActionType.SELL_STOP:
                         state.state = BotState(state_before)
                         state.halted = False
                         state.halt_reason = None
                     else:
+                        if is_ioc_exit:
+                            state.pending_order = None
                         state.state = BotState.HALTED
                         state.halted = True
-                        state.halt_reason = "residual_position_after_emergency_exit"
+                        state.halt_reason = (
+                            "ioc_emergency_exit_partial_residual"
+                            if is_ioc_exit
+                            else "residual_position_after_emergency_exit"
+                        )
                     order_result.applied_state_after = state.state.value
                     write_state(state, str(state_path))
                     _log_cycle_safely(
