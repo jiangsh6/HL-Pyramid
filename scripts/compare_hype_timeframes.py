@@ -18,6 +18,10 @@ from src.core.config_loader import load_config
 def _recommend(rows: list[dict]) -> str:
     if len(rows) < 2:
         return "inconclusive"
+    if any(float(row.get("trade_count", 0) or 0) <= 0 for row in rows):
+        return "inconclusive"
+    if any(float(row.get("time_in_market_pct", 0) or 0) <= 0 for row in rows):
+        return "inconclusive"
     ranked = sorted(
         rows,
         key=lambda row: (
@@ -29,6 +33,16 @@ def _recommend(rows: list[dict]) -> str:
     if ranked[0]["excess_return_vs_buy_hold_pct"] == ranked[1]["excess_return_vs_buy_hold_pct"]:
         return "inconclusive"
     return str(ranked[0]["interval"])
+
+
+def _recommendation_reason(rows: list[dict], recommendation: str) -> str:
+    if recommendation == "inconclusive":
+        if any(float(row.get("trade_count", 0) or 0) <= 0 for row in rows):
+            return "inconclusive_zero_trade_timeframe"
+        if any(float(row.get("time_in_market_pct", 0) or 0) <= 0 for row in rows):
+            return "inconclusive_zero_time_in_market"
+        return "inconclusive_no_clear_edge"
+    return "recommended_by_excess_return_drawdown_trade_activity"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -68,6 +82,7 @@ def main(argv: list[str] | None = None) -> int:
             "average_readiness_score": summary["average_readiness_score"],
         })
     recommendation = _recommend(rows)
+    recommendation_reason = _recommendation_reason(rows, recommendation)
     csv_path = out_dir / f"timeframe_comparison_{run_id}.csv"
     md_path = out_dir / f"timeframe_comparison_{run_id}.md"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -77,13 +92,19 @@ def main(argv: list[str] | None = None) -> int:
         writer.writerows(rows)
     md_path.write_text(
         "# HYPE Timeframe Comparison\n\n"
-        + "\n".join(f"- {row['interval']}: return={row['return_pct']}, max_dd={row['max_drawdown_pct']}" for row in rows)
+        + "\n".join(
+            f"- {row['interval']}: return={row['return_pct']}, max_dd={row['max_drawdown_pct']}, "
+            f"trades={row['trade_count']}, time_in_market={row['time_in_market_pct']}"
+            for row in rows
+        )
         + f"\n\nRecommendation: `{recommendation}`\n"
+        + f"\nReason: `{recommendation_reason}`\n"
     )
     print("TIMEFRAME_COMPARISON_COMPLETE")
     print("csv=" + str(csv_path))
     print("markdown=" + str(md_path))
     print("recommendation=" + recommendation)
+    print("recommendation_reason=" + recommendation_reason)
     return 0
 
 

@@ -24,6 +24,7 @@ def compute_backtest_metrics(
     first_close: float,
     last_close: float,
     interval_hours: float,
+    config: Any,
 ) -> dict[str, Any]:
     equity = equity_curve["equity"] if not equity_curve.empty else pd.Series([starting_equity])
     returns = equity.pct_change().dropna()
@@ -37,9 +38,18 @@ def compute_backtest_metrics(
             annualized = ((float(equity.iloc[-1]) / starting_equity) ** (1.0 / years) - 1.0) * 100.0
     bh_equity = starting_equity * (equity_curve["close"] / first_close) if not equity_curve.empty and first_close else pd.Series()
 
-    sell_pnls = [float(order.get("realized_pnl", 0.0) or 0.0) for order in orders if str(order.get("side")) == "sell"]
+    sell_orders = [order for order in orders if str(order.get("side")) == "sell"]
+    sell_pnls = [float(order.get("realized_pnl", 0.0) or 0.0) for order in sell_orders]
+    sell_returns = [float(order.get("return_pct", 0.0) or 0.0) for order in sell_orders]
     wins = [pnl for pnl in sell_pnls if pnl > 0]
     losses = [pnl for pnl in sell_pnls if pnl < 0]
+    win_returns = [ret for ret in sell_returns if ret > 0]
+    loss_returns = [ret for ret in sell_returns if ret < 0]
+    no_leverage_loss_bound_ok = all(
+        abs(float(order.get("realized_pnl", 0.0) or 0.0)) <= float(order.get("cost_basis", 0.0) or 0.0) + 1e-9
+        for order in sell_orders
+        if float(order.get("realized_pnl", 0.0) or 0.0) < 0
+    )
     blocker_counter: Counter[str] = Counter()
     readiness_values: list[float] = []
     for decision in decisions:
@@ -55,6 +65,10 @@ def compute_backtest_metrics(
     stops = [o for o in orders if "stop" in str(o.get("action", ""))]
     exposure = equity_curve["exposure_pct"] if not equity_curve.empty else pd.Series(dtype=float)
     risk_util = equity_curve["risk_budget_utilization"] if not equity_curve.empty else pd.Series(dtype=float)
+    accounting_error = pd.Series([0.0])
+    if {"equity", "cash_equity", "unrealized_pnl"}.issubset(equity_curve.columns):
+        accounting_error = (equity_curve["equity"] - equity_curve["cash_equity"] - equity_curve["unrealized_pnl"]).abs()
+    max_allowed_exposure = float(getattr(config, "capital", {}).get("max_symbol_exposure_pct", 1.0) or 1.0) * 1.05
 
     return {
         "strategy_scope": "starter_add_stop_only",
@@ -66,7 +80,7 @@ def compute_backtest_metrics(
         "buy_and_hold_max_drawdown_pct": _max_drawdown(bh_equity),
         "realized_volatility": float(returns.std() * sqrt(periods_per_year) * 100.0) if len(returns) > 1 else 0.0,
         "downside_volatility": float(returns[returns < 0].std() * sqrt(periods_per_year) * 100.0) if len(returns[returns < 0]) > 1 else 0.0,
-        "worst_trade_pct": min(sell_pnls) if sell_pnls else 0.0,
+        "worst_trade_pct": min(sell_returns) if sell_returns else 0.0,
         "number_of_entries": len(entries),
         "number_of_adds": len(adds),
         "number_of_exits": len(exits),
@@ -74,8 +88,8 @@ def compute_backtest_metrics(
         "average_hold_hours": 0.0,
         "time_in_market_pct": float(in_market.mean() * 100.0) if len(in_market) else 0.0,
         "win_rate": len(wins) / len(sell_pnls) * 100.0 if sell_pnls else 0.0,
-        "avg_win_pct": sum(wins) / len(wins) if wins else 0.0,
-        "avg_loss_pct": sum(losses) / len(losses) if losses else 0.0,
+        "avg_win_pct": sum(win_returns) / len(win_returns) if win_returns else 0.0,
+        "avg_loss_pct": sum(loss_returns) / len(loss_returns) if loss_returns else 0.0,
         "profit_factor": (sum(wins) / abs(sum(losses))) if losses else (float("inf") if wins else 0.0),
         "max_add_count_reached": max((int(row.get("add_count", 0)) for row in equity_curve.to_dict("records")), default=0),
         "average_add_count": float(equity_curve["add_count"].mean()) if not equity_curve.empty else 0.0,
@@ -83,6 +97,12 @@ def compute_backtest_metrics(
         "max_exposure_pct": float(exposure.max()) if not exposure.empty else 0.0,
         "risk_budget_utilization_avg": float(risk_util.mean()) if not risk_util.empty else 0.0,
         "risk_budget_utilization_max": float(risk_util.max()) if not risk_util.empty else 0.0,
+        "min_account_equity": float(equity.min()) if not equity.empty else starting_equity,
+        "account_equity_non_negative": bool(float(equity.min()) >= -1e-9) if not equity.empty else True,
+        "no_leverage_loss_bound_ok": bool(no_leverage_loss_bound_ok),
+        "accounting_reconciled": bool(float(accounting_error.max()) <= 1e-8),
+        "max_accounting_error": float(accounting_error.max()),
+        "max_exposure_within_config": bool(float(exposure.max()) <= max_allowed_exposure) if not exposure.empty else True,
         "no_action_count": sum(1 for d in decisions if d.get("action") == "no_action"),
         "top_blockers": blocker_counter.most_common(10),
         "average_readiness_score": sum(readiness_values) / len(readiness_values) if readiness_values else 0.0,

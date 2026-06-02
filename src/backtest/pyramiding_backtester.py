@@ -104,6 +104,27 @@ def _row_time(value: Any) -> str:
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
 
+def lifo_cost_basis(state: ThesisState, qty_to_sell: float) -> float:
+    """Return LIFO cost basis for qty_to_sell without mutating state."""
+    remaining = float(qty_to_sell)
+    cost = 0.0
+    for lot in reversed(list(state.addon_lots)):
+        if remaining <= 0:
+            break
+        qty = min(remaining, lot.qty)
+        cost += qty * lot.entry_price
+        remaining -= qty
+    if remaining > 0 and state.base_lot is not None:
+        qty = min(remaining, state.base_lot.qty)
+        cost += qty * state.base_lot.entry_price
+    return cost
+
+
+def unrealized_at_price(state: ThesisState, price: float) -> float:
+    lots = ([state.base_lot] if state.base_lot is not None else []) + list(state.addon_lots)
+    return sum((price - lot.entry_price) * lot.qty for lot in lots)
+
+
 def run_research_backtest(
     *,
     df: pd.DataFrame,
@@ -173,6 +194,10 @@ def run_research_backtest(
         })
 
         state_before = state.state.value
+        pre_fill_cost_basis = (
+            lifo_cost_basis(state, decision.qty)
+            if decision.action in SELL_ACTIONS else 0.0
+        )
         fill = deterministic_fill(
             decision=decision,
             next_open=float(next_bar["open"]),
@@ -181,17 +206,31 @@ def run_research_backtest(
             timestamp=next_ts.to_pydatetime() if hasattr(next_ts, "to_pydatetime") else datetime.now(timezone.utc),
         )
         if fill is not None:
+            account_equity_before = equity + unrealized_at_price(state, fill.fill_price)
             apply_fill(state, fill)
             if decision.new_state is not None:
                 state.state = decision.new_state
             equity += fill.realized_pnl
+            account_equity_after = equity + unrealized_at_price(state, fill.fill_price)
+            fill_notional = fill.qty * fill.fill_price
+            cost_basis = pre_fill_cost_basis if decision.action in SELL_ACTIONS else fill_notional
+            return_pct = (
+                (fill.realized_pnl / cost_basis) * 100.0
+                if decision.action in SELL_ACTIONS and cost_basis > 0
+                else 0.0
+            )
             orders.append({
                 "timestamp": _row_time(next_ts),
                 "action": decision.action.value,
                 "side": "buy" if decision.action in BUY_ACTIONS else "sell",
                 "qty": fill.qty,
+                "notional": fill_notional,
+                "cost_basis": cost_basis,
                 "fill_price": fill.fill_price,
                 "realized_pnl": fill.realized_pnl,
+                "return_pct": return_pct,
+                "account_equity_before": account_equity_before,
+                "account_equity_after": account_equity_after,
                 "state_before": state_before,
                 "state_after": state.state.value,
             })
@@ -225,6 +264,9 @@ def run_research_backtest(
             "close": float(current_bar["close"]),
             "equity": mark_equity,
             "cash_equity": equity,
+            "realized_pnl": state.realized_pnl,
+            "unrealized_pnl": state.unrealized_pnl,
+            "notional": notional,
             "position_qty": state.current_position_qty,
             "exposure_pct": exposure_pct,
             "add_count": state.add_count,
@@ -242,6 +284,7 @@ def run_research_backtest(
         first_close=float(df["close"].iloc[0]),
         last_close=float(df["close"].iloc[-1]),
         interval_hours=interval_hours,
+        config=config,
     )
     summary.update({
         "run_id": run_id,

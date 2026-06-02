@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from scripts import compare_hype_timeframes, sweep_hype_parameters
+from src.backtest.backtest_metrics import compute_backtest_metrics
 from src.backtest.historical_loader import normalize_ohlcv
 from src.backtest.pyramiding_backtester import run_research_backtest
 from src.core.config_loader import load_config
@@ -29,6 +30,18 @@ def _df(rows: int = 90, *, freq: str = "1h") -> pd.DataFrame:
         },
         index=idx,
     )
+
+
+def _crash_df(rows: int = 90) -> pd.DataFrame:
+    df = _df(rows)
+    for i in range(60, rows):
+        value = max(1.0, 11.8 - (i - 59) * 0.55)
+        df.iloc[i, df.columns.get_loc("open")] = value
+        df.iloc[i, df.columns.get_loc("high")] = value * 1.01
+        df.iloc[i, df.columns.get_loc("low")] = value * 0.98
+        df.iloc[i, df.columns.get_loc("close")] = value
+        df.iloc[i, df.columns.get_loc("adj_close")] = value
+    return df
 
 
 def _cfg(monkeypatch):
@@ -103,6 +116,22 @@ def test_state_updates_after_simulated_fill(monkeypatch, tmp_path):
     assert result.final_state.base_lot is not None
 
 
+def test_full_exit_order_equity_after_does_not_include_stale_unrealized(monkeypatch, tmp_path):
+    cfg = _cfg(monkeypatch)
+    result = run_research_backtest(
+        df=_crash_df(),
+        config=cfg,
+        coin="HYPE",
+        interval="1h",
+        run_dir=tmp_path,
+        run_id="crash_test",
+        slippage_bps=0.0,
+    )
+    sell = next(order for order in result.orders if order["side"] == "sell")
+
+    assert sell["account_equity_after"] == sell["account_equity_before"]
+
+
 def test_compare_timeframes_produces_output(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     source_cfg = Path("/Users/shujiajiang/Crypto Dev/HL Primiding/config/hype_candidate_normal_v2.yaml")
@@ -164,3 +193,80 @@ def test_future_ticker_argument_is_structurally_accepted(monkeypatch, tmp_path):
     )
 
     assert result.final_state.symbol == "NVDA"
+
+
+def test_simple_trade_return_pct_metrics(monkeypatch):
+    cfg = _cfg(monkeypatch)
+    equity_curve = pd.DataFrame({
+        "equity": [900.0, 910.0, 920.0],
+        "cash_equity": [900.0, 910.0, 920.0],
+        "unrealized_pnl": [0.0, 0.0, 0.0],
+        "close": [100.0, 105.0, 110.0],
+        "position_qty": [0.0, 0.0, 0.0],
+        "exposure_pct": [0.0, 0.0, 0.0],
+        "risk_budget_utilization": [0.0, 0.0, 0.0],
+        "add_count": [0, 0, 0],
+    })
+    orders = [
+        {"side": "sell", "action": "sell_stop", "realized_pnl": 10.0, "return_pct": 10.0, "cost_basis": 100.0},
+        {"side": "sell", "action": "sell_stop", "realized_pnl": -5.0, "return_pct": -5.0, "cost_basis": 100.0},
+    ]
+
+    metrics = compute_backtest_metrics(
+        equity_curve=equity_curve,
+        orders=orders,
+        decisions=[],
+        starting_equity=900.0,
+        first_close=100.0,
+        last_close=110.0,
+        interval_hours=1.0,
+        config=cfg,
+    )
+
+    assert metrics["avg_win_pct"] == 10.0
+    assert metrics["avg_loss_pct"] == -5.0
+    assert metrics["worst_trade_pct"] == -5.0
+    assert round(metrics["total_return_pct"], 6) == round((920.0 / 900.0 - 1.0) * 100.0, 6)
+
+
+def test_no_leverage_loss_bounded_and_accounting_invariants(monkeypatch):
+    cfg = _cfg(monkeypatch)
+    equity_curve = pd.DataFrame({
+        "equity": [900.0, 850.0],
+        "cash_equity": [900.0, 860.0],
+        "unrealized_pnl": [0.0, -10.0],
+        "close": [100.0, 90.0],
+        "position_qty": [1.0, 1.0],
+        "exposure_pct": [0.2, 0.2],
+        "risk_budget_utilization": [0.1, 0.1],
+        "add_count": [0, 0],
+    })
+    orders = [
+        {"side": "sell", "action": "sell_stop", "realized_pnl": -40.0, "return_pct": -40.0, "cost_basis": 100.0},
+    ]
+
+    metrics = compute_backtest_metrics(
+        equity_curve=equity_curve,
+        orders=orders,
+        decisions=[],
+        starting_equity=900.0,
+        first_close=100.0,
+        last_close=90.0,
+        interval_hours=1.0,
+        config=cfg,
+    )
+
+    assert metrics["no_leverage_loss_bound_ok"] is True
+    assert metrics["account_equity_non_negative"] is True
+    assert metrics["accounting_reconciled"] is True
+    assert metrics["max_exposure_within_config"] is True
+
+
+def test_zero_trade_timeframe_recommendation_is_inconclusive():
+    rows = [
+        {"interval": "1h", "trade_count": 2, "time_in_market_pct": 50, "excess_return_vs_buy_hold_pct": -5, "max_drawdown_pct": -10},
+        {"interval": "4h", "trade_count": 0, "time_in_market_pct": 0, "excess_return_vs_buy_hold_pct": 0, "max_drawdown_pct": 0},
+    ]
+
+    assert compare_hype_timeframes._recommend(rows) == "inconclusive"
+    assert compare_hype_timeframes._recommendation_reason(rows, "inconclusive") == "inconclusive_zero_trade_timeframe"
