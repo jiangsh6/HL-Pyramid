@@ -8,6 +8,7 @@ import yaml
 
 from scripts.generate_hype_candidate_configs import generate, production_scores
 from src.core.config_loader import load_config
+from src.reporting.strategy_sanity_audit import build_strategy_sanity_audit
 
 
 TESTNET_WALLET = "0x1111111111111111111111111111111111111111"
@@ -99,3 +100,17 @@ def test_candidate_profiles_have_expected_parameter_shape(tmp_path):
     assert normal["capital"]["max_symbol_exposure_pct"] > conservative["capital"]["max_symbol_exposure_pct"]
     assert aggressive["add"]["max_add_count"] > normal["add"]["max_add_count"]
     assert normal["add"]["max_add_count"] > conservative["add"]["max_add_count"]
+
+
+def test_hype_candidate_normal_v2_loads_and_has_no_sanity_warnings(monkeypatch):
+    monkeypatch.setenv("HL_TESTNET_ACCOUNT_ADDRESS", TESTNET_WALLET)
+
+    cfg = load_config("config/hype_candidate_normal_v2.yaml")
+    audit = build_strategy_sanity_audit(cfg)
+
+    assert cfg.hl["network"] == "testnet"
+    assert cfg.hl["coin"] == "HYPE"
+    assert cfg.entry["starter"]["max_intraday_gain_pct"] == 0.05
+    assert cfg.entry["breakout_base"]["min_volume_vs_20d_avg"] == 1.0
+    assert cfg.risk["max_loss"]["max_thesis_loss_pct_of_equity"] == 0.04
+    assert audit["warning_count"] == 0
