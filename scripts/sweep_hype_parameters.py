@@ -13,7 +13,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.backtest.historical_loader import load_historical_candles
+from src.backtest.historical_loader import execution_network, historical_data_network, load_historical_candles
 from src.backtest.parameter_grid import apply_parameter_set, config_to_raw, parameter_combinations
 from src.backtest.pyramiding_backtester import run_research_backtest
 from src.core.config_loader import load_config
@@ -41,8 +41,11 @@ def main(argv: list[str] | None = None) -> int:
     base_config = load_config(args.base_config)
     raw_base = config_to_raw(base_config)
     coin = str((base_config.hl or {}).get("coin", "HYPE"))
-    network = str((base_config.hl or {}).get("network", "testnet"))
-    df = load_historical_candles(coin=coin, interval=args.interval, start=args.start, end=args.end, network=network)
+    exec_network = execution_network(base_config)
+    data_network = historical_data_network(base_config)
+    print("execution_network=" + exec_network)
+    print("historical_data_network=" + data_network)
+    df = load_historical_candles(coin=coin, interval=args.interval, start=args.start, end=args.end, network=data_network)
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_dir = Path("reports/backtests") / coin.lower()

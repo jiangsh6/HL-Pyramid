@@ -27,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interval", default="1h")
     parser.add_argument("--start", required=True)
     parser.add_argument("--end", required=True)
-    parser.add_argument("--network", default="testnet")
+    parser.add_argument("--network", default="mainnet")
     parser.add_argument("--extreme-bar-return-abs-pct", type=float, default=30.0)
     parser.add_argument("--extreme-gap-abs-pct", type=float, default=30.0)
     parser.add_argument("--extreme-range-pct", type=float, default=50.0)
@@ -36,9 +36,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--focus-timestamp", default="2026-01-03T23:00:00Z")
     args = parser.parse_args(argv)
 
-    if args.network != "testnet":
-        raise SystemExit("history audit is intended for testnet research data only")
+    if args.network not in ("testnet", "mainnet"):
+        raise SystemExit("network must be testnet or mainnet")
 
+    print("historical_data_network=" + args.network)
     df = load_historical_candles(
         coin=args.coin,
         interval=args.interval,

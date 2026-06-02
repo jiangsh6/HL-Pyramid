@@ -9,7 +9,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.backtest.historical_loader import load_historical_candles
+from src.backtest.historical_loader import execution_network, historical_data_network, load_historical_candles
 from src.backtest.data_quality import (
     DataQualityThresholds,
     audit_ohlcv_quality,
@@ -36,13 +36,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     config = load_config(args.config)
-    network = str((config.hl or {}).get("network", "testnet"))
+    exec_network = execution_network(config)
+    data_network = historical_data_network(config)
+    print("execution_network=" + exec_network)
+    print("historical_data_network=" + data_network)
     df = load_historical_candles(
         coin=args.coin,
         interval=args.interval,
         start=args.start,
         end=args.end,
-        network=network,
+        network=data_network,
     )
     quality_report = audit_ohlcv_quality(
         df,

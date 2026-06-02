@@ -187,6 +187,7 @@ execution:
   use_ioc_for_cleanup_exit: false
 data:
   source: hyperliquid
+  network: mainnet
   bar_interval: 1h
   intraday_check_interval_minutes: 15
   use_adjusted_close: false

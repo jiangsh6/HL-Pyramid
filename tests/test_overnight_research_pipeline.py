@@ -41,7 +41,13 @@ def _dirty_df(rows: int = 130, *, freq: str = "1h") -> pd.DataFrame:
 def _run(monkeypatch, tmp_path, df, extra_args: list[str] | None = None, coin: str = "HYPE") -> Path:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HL_TESTNET_ACCOUNT_ADDRESS", TESTNET_WALLET)
-    monkeypatch.setattr(run_overnight_research, "load_historical_candles", lambda **kwargs: df.copy())
+    seen_networks = []
+
+    def fake_loader(**kwargs):
+        seen_networks.append(kwargs["network"])
+        return df.copy()
+
+    monkeypatch.setattr(run_overnight_research, "load_historical_candles", fake_loader)
     args = [
         "--coin", coin,
         "--base-config", CONFIG,
@@ -55,6 +61,8 @@ def _run(monkeypatch, tmp_path, df, extra_args: list[str] | None = None, coin: s
     assert run_overnight_research.main(args) == 0
     dirs = sorted((tmp_path / "reports/research" / coin.lower()).glob("*"))
     assert dirs
+    assert seen_networks
+    assert set(seen_networks) == {"mainnet"}
     return dirs[-1]
 
 
@@ -68,6 +76,9 @@ def test_pipeline_creates_output_directory_and_final_reports(monkeypatch, tmp_pa
     assert (out_dir / "baseline.json").exists()
     assert (out_dir / "timeframe_comparison.csv").exists()
     assert (out_dir / "signal_validation.json").exists()
+    summary = json.loads((out_dir / "overnight_research_summary.json").read_text())
+    assert summary["execution_network"] == "testnet"
+    assert summary["historical_data_network"] == "mainnet"
 
 
 def test_data_quality_stage_stops_pipeline_by_default_on_dirty_data(monkeypatch, tmp_path):

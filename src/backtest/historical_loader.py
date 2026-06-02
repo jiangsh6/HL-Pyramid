@@ -7,9 +7,22 @@ import pandas as pd
 
 from src.hl.candles import fetch_ohlcv_hl
 from src.hl.client import HyperliquidClient
+from src.core.models import BotConfig
 
 
 REQUIRED_OHLCV_COLUMNS = ["open", "high", "low", "close", "adj_close", "volume"]
+
+
+def historical_data_network(config: BotConfig) -> str:
+    """Return the read-only candle network, separate from execution network."""
+    network = str((config.data or {}).get("network") or (config.hl or {}).get("network", "testnet"))
+    if network not in ("testnet", "mainnet"):
+        raise ValueError(f"data.network must be 'testnet' or 'mainnet'; got '{network}'")
+    return network
+
+
+def execution_network(config: BotConfig) -> str:
+    return str((config.hl or {}).get("network", config.bot.get("mode", "testnet")))
 
 
 def _to_ms(value: str) -> int:

@@ -109,6 +109,7 @@ def test_hype_candidate_normal_v2_loads_and_has_no_sanity_warnings(monkeypatch):
     audit = build_strategy_sanity_audit(cfg)
 
     assert cfg.hl["network"] == "testnet"
+    assert cfg.data["network"] == "mainnet"
     assert cfg.hl["coin"] == "HYPE"
     assert cfg.entry["starter"]["max_intraday_gain_pct"] == 0.05
     assert cfg.entry["breakout_base"]["min_volume_vs_20d_avg"] == 1.0

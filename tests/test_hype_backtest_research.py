@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from scripts import compare_hype_timeframes, sweep_hype_parameters
+from scripts import compare_hype_timeframes, run_hype_backtest, sweep_hype_parameters
+from src.backtest.historical_loader import execution_network, historical_data_network
 from src.backtest.backtest_metrics import compute_backtest_metrics
 from src.backtest.historical_loader import normalize_ohlcv
 from src.backtest.pyramiding_backtester import run_research_backtest
@@ -58,6 +59,13 @@ def test_historical_loader_normalizes_required_ohlcv_fields():
 
     assert list(out.columns) == ["open", "high", "low", "close", "adj_close", "volume"]
     assert out["adj_close"].equals(out["close"])
+
+
+def test_research_data_network_separates_from_execution_network(monkeypatch):
+    cfg = _cfg(monkeypatch)
+
+    assert execution_network(cfg) == "testnet"
+    assert historical_data_network(cfg) == "mainnet"
 
 
 def test_backtest_next_bar_open_fill_and_outputs(monkeypatch, tmp_path):
@@ -138,7 +146,13 @@ def test_compare_timeframes_produces_output(monkeypatch, tmp_path):
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(source_cfg.read_text())
     monkeypatch.setenv("HL_TESTNET_ACCOUNT_ADDRESS", TESTNET_WALLET)
-    monkeypatch.setattr(compare_hype_timeframes, "load_historical_candles", lambda **kwargs: _df(freq=kwargs["interval"]))
+    seen_networks = []
+
+    def fake_loader(**kwargs):
+        seen_networks.append(kwargs["network"])
+        return _df(freq=kwargs["interval"])
+
+    monkeypatch.setattr(compare_hype_timeframes, "load_historical_candles", fake_loader)
 
     status = compare_hype_timeframes.main([
         "--config", str(cfg_path),
@@ -147,6 +161,7 @@ def test_compare_timeframes_produces_output(monkeypatch, tmp_path):
     ])
 
     assert status == 0
+    assert seen_networks == ["mainnet", "mainnet"]
     assert list((tmp_path / "reports/backtests/hype").glob("timeframe_comparison_*.csv"))
     assert list((tmp_path / "reports/backtests/hype").glob("timeframe_comparison_*.md"))
 
@@ -157,7 +172,13 @@ def test_parameter_sweep_produces_output(monkeypatch, tmp_path):
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(source_cfg.read_text())
     monkeypatch.setenv("HL_TESTNET_ACCOUNT_ADDRESS", TESTNET_WALLET)
-    monkeypatch.setattr(sweep_hype_parameters, "load_historical_candles", lambda **kwargs: _df())
+    seen_networks = []
+
+    def fake_loader(**kwargs):
+        seen_networks.append(kwargs["network"])
+        return _df()
+
+    monkeypatch.setattr(sweep_hype_parameters, "load_historical_candles", fake_loader)
 
     status = sweep_hype_parameters.main([
         "--base-config", str(cfg_path),
@@ -168,9 +189,36 @@ def test_parameter_sweep_produces_output(monkeypatch, tmp_path):
     ])
 
     assert status == 0
+    assert seen_networks == ["mainnet"]
     assert list((tmp_path / "reports/backtests/hype").glob("parameter_sweep_*.csv"))
     assert list((tmp_path / "reports/backtests/hype").glob("parameter_sweep_*.json"))
     assert list((tmp_path / "reports/backtests/hype").glob("parameter_sweep_*.md"))
+
+
+def test_run_hype_backtest_uses_data_network_mainnet(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    source_cfg = Path("/Users/shujiajiang/Crypto Dev/HL Primiding/config/hype_candidate_normal_v2.yaml")
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(source_cfg.read_text())
+    monkeypatch.setenv("HL_TESTNET_ACCOUNT_ADDRESS", TESTNET_WALLET)
+    seen_networks = []
+
+    def fake_loader(**kwargs):
+        seen_networks.append(kwargs["network"])
+        return _df()
+
+    monkeypatch.setattr(run_hype_backtest, "load_historical_candles", fake_loader)
+
+    status = run_hype_backtest.main([
+        "--config", str(cfg_path),
+        "--coin", "HYPE",
+        "--interval", "1h",
+        "--start", "2026-01-01",
+        "--end", "2026-02-01",
+    ])
+
+    assert status == 0
+    assert seen_networks == ["mainnet"]
 
 
 def test_backtest_research_does_not_import_live_execution_or_telegram():

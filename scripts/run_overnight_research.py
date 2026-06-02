@@ -21,7 +21,7 @@ from src.backtest.data_quality import (  # noqa: E402
     filter_flagged_candles,
     write_history_quality_report,
 )
-from src.backtest.historical_loader import load_historical_candles  # noqa: E402
+from src.backtest.historical_loader import execution_network, historical_data_network, load_historical_candles  # noqa: E402
 from src.backtest.parameter_grid import apply_parameter_set, config_to_raw, parameter_combinations  # noqa: E402
 from src.backtest.pyramiding_backtester import run_research_backtest  # noqa: E402
 from src.core.config_loader import load_config  # noqa: E402
@@ -207,14 +207,14 @@ def run_timeframe_stage(
     intervals: list[str],
     start: str,
     end: str,
-    network: str,
+    data_network: str,
     out_dir: Path,
     allow_dirty_data: bool,
     exclude_flagged_candles: bool,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for interval in intervals:
-        df = load_historical_candles(coin=coin, interval=interval, start=start, end=end, network=network)
+        df = load_historical_candles(coin=coin, interval=interval, start=start, end=end, network=data_network)
         quality = audit_ohlcv_quality(df, interval=interval)
         policy = "excluded" if exclude_flagged_candles else "included"
         if exclude_flagged_candles:
@@ -497,7 +497,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     config = load_config(args.base_config)
-    network = str((config.hl or {}).get("network", "testnet"))
+    exec_network = execution_network(config)
+    data_network = historical_data_network(config)
+    print("execution_network=" + exec_network)
+    print("historical_data_network=" + data_network)
     run_id = build_run_id(args.coin)
     out_dir = Path("reports/research") / args.coin.lower() / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -509,7 +512,7 @@ def main(argv: list[str] | None = None) -> int:
         interval=primary_interval,
         start=args.start,
         end=args.end,
-        network=network,
+        network=data_network,
     )
     quality_report, quality_payload = run_quality_stage(
         df=original_df,
@@ -556,6 +559,8 @@ def main(argv: list[str] | None = None) -> int:
         payload = {
             "coin": args.coin,
             "run_id": run_id,
+            "execution_network": exec_network,
+            "historical_data_network": data_network,
             "selected_start": selected_start,
             "selected_end": args.end,
             "auto_clean_start_used": auto_clean_start_used,
@@ -580,7 +585,7 @@ def main(argv: list[str] | None = None) -> int:
         intervals=intervals,
         start=selected_start,
         end=args.end,
-        network=network,
+        data_network=data_network,
         out_dir=out_dir,
         allow_dirty_data=args.allow_dirty_data,
         exclude_flagged_candles=args.exclude_flagged_candles,
@@ -617,6 +622,8 @@ def main(argv: list[str] | None = None) -> int:
     payload = {
         "coin": args.coin,
         "run_id": run_id,
+        "execution_network": exec_network,
+        "historical_data_network": data_network,
         "selected_start": selected_start,
         "selected_end": args.end,
         "auto_clean_start_used": auto_clean_start_used,

@@ -4,6 +4,7 @@ import json
 
 import pandas as pd
 
+from scripts import audit_hype_history
 from src.backtest.data_quality import (
     DataQualityThresholds,
     audit_ohlcv_quality,
@@ -150,3 +151,26 @@ def test_backtest_summary_includes_data_quality_warning_count(monkeypatch, tmp_p
     assert result.summary["data_quality_warning_count"] == 3
     assert summary["flagged_candles_policy"] == "included"
     assert "Data Quality" in (tmp_path / "backtest_report.md").read_text()
+
+
+def test_audit_hype_history_accepts_mainnet_network(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    seen_networks = []
+
+    def fake_loader(**kwargs):
+        seen_networks.append(kwargs["network"])
+        return _quality_df()
+
+    monkeypatch.setattr(audit_hype_history, "load_historical_candles", fake_loader)
+
+    status = audit_hype_history.main([
+        "--coin", "HYPE",
+        "--interval", "1h",
+        "--start", "2026-01-01",
+        "--end", "2026-02-01",
+        "--network", "mainnet",
+    ])
+
+    assert status == 0
+    assert seen_networks == ["mainnet"]
+    assert list((tmp_path / "reports/backtests/hype").glob("history_quality_*.json"))
