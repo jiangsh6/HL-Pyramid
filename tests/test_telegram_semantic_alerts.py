@@ -178,11 +178,11 @@ def _semantic_events(events):
 def test_semantic_formatting_uses_unknown_for_missing_fields():
     text = format_event({"type": "semantic", "event": "position_opened"})
 
-    assert "HL semantic" in text
-    assert "event=position_opened" in text
-    assert "run_id=unknown" in text
-    assert "state_before=unknown" in text
-    assert "order_id=unknown" in text
+    assert "✅ HL Trading Alert" in text
+    assert "Event: position_opened" in text
+    assert "Run:\n-" in text
+    assert "State Before: -" in text
+    assert "Order ID: -" in text
 
 
 def test_semantic_notifier_failures_are_fail_soft(tmp_path, monkeypatch):

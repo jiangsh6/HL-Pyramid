@@ -95,11 +95,11 @@ def test_heartbeat_alert_formatting_includes_key_fields():
         "last_decision": "CONTINUE",
         "dry_run": True,
     })
-    assert "HL heartbeat" in text
-    assert "network=testnet" in text
-    assert "coin=BTC" in text
-    assert "open_orders_count=0" in text
-    assert "dry_run=True" in text
+    assert "💓 HL Heartbeat" in text
+    assert "Network: Testnet" in text
+    assert "Coin: BTC" in text
+    assert "Open Orders: 0" in text
+    assert "Mode: Dry Run" in text
 
 
 def test_decision_alert_formatting_includes_decision_and_dry_run():
@@ -112,9 +112,9 @@ def test_decision_alert_formatting_includes_decision_and_dry_run():
         "price": 72335.0,
         "dry_run": True,
     })
-    assert "HL decision" in text
-    assert "decision=buy_starter" in text
-    assert "dry_run=True" in text
+    assert "🧭 HL Decision" in text
+    assert "Decision: buy_starter" in text
+    assert "Mode: Dry Run" in text
 
 
 def test_order_alert_formatting_includes_order_fields():
@@ -130,12 +130,12 @@ def test_order_alert_formatting_includes_order_fields():
         "filled_qty": 0.0,
         "remaining_qty": 0.005,
     })
-    assert "HL order" in text
-    assert "side=sell" in text
-    assert "qty=0.005" in text
-    assert "px=70000" in text
-    assert "oid=123" in text
-    assert "status=submitted_unfilled" in text
+    assert "📨 HL Order Update" in text
+    assert "Side: sell" in text
+    assert "Qty: 0.005" in text
+    assert "Price: 70000" in text
+    assert "OID: 123" in text
+    assert "Status: submitted_unfilled" in text
 
 
 def test_safety_alert_formatting_includes_halt_reason():
@@ -148,8 +148,8 @@ def test_safety_alert_formatting_includes_halt_reason():
         "halt_reason": "pending_order_missing_on_exchange",
         "dry_run": False,
     })
-    assert "HL safety" in text
-    assert "halt_reason=pending_order_missing_on_exchange" in text
+    assert "🚨 HL Bot Halted" in text
+    assert "Reason:\npending_order_missing_on_exchange" in text
 
 
 def test_config_toggle_disables_alerts():
@@ -304,11 +304,11 @@ def test_telegram_event_formatting_includes_required_operational_context():
         "dry_run": False,
     })
 
-    assert "run_id=run-1" in text
-    assert "network=testnet" in text
-    assert "state=FLAT" in text
-    assert "exchange_position_qty=0" in text
-    assert "local_position_qty=0" in text
+    assert "Run:\nrun-1" in text
+    assert "Network: Testnet" in text
+    assert "State: FLAT" in text
+    assert "Exchange Qty: 0" in text
+    assert "Local Qty: 0" in text
 
 
 def test_duplicate_safety_alerts_are_suppressed(tmp_path, monkeypatch):

@@ -45,26 +45,25 @@ def test_weekly_summary_formatting_includes_required_fields():
         "reconciliation_status": "ok",
     })
 
-    assert "HL weekly summary" in text
-    assert "event=weekly_summary" in text
-    assert "run_id=run-1" in text
-    assert "network=testnet" in text
-    assert "week_start=2026-06-01" in text
-    assert "week_end=2026-06-07" in text
-    assert "current_state=BASE_LONG" in text
-    assert "weekly_pnl=12.5" in text
-    assert "trade_count=3" in text
-    assert "reconciliation_status=ok" in text
+    assert "📅 HL Weekly Summary" in text
+    assert "Run:\nrun-1" in text
+    assert "Network: Testnet" in text
+    assert "Week Start: 2026-06-01" in text
+    assert "Week End: 2026-06-07" in text
+    assert "State: BASE_LONG" in text
+    assert "Weekly PnL: 12.5" in text
+    assert "Trades: 3" in text
+    assert "Reconciliation: ok" in text
 
 
 def test_weekly_summary_unknown_field_handling():
     text = format_event({"type": "weekly_summary"})
 
-    assert "run_id=unknown" in text
-    assert "network=unknown" in text
-    assert "week_start=unknown" in text
-    assert "ending_equity=unknown" in text
-    assert "trade_count=unknown" in text
+    assert "Run:\n-" in text
+    assert "Network: -" in text
+    assert "Week Start: -" in text
+    assert "Ending Equity: -" in text
+    assert "Trades: -" in text
 
 
 def test_weekly_summary_sends_once_per_week(tmp_path, monkeypatch):
