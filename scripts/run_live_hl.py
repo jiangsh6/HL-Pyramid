@@ -7,7 +7,7 @@ Startup sequence:
   3. Build HyperliquidClient (testnet by default)
   4. Load state.json if present, else initialize fresh ThesisState
   5. Start WebSocket feed + intraday monitor thread
-  6. Enter 4h candle-close decision loop
+  6. Enter configured candle-close decision loop
 
 Shutdown: SIGTERM / SIGINT sets the global stop event, which unwinds the loop
 and the intraday monitor thread within a few seconds.
@@ -89,7 +89,15 @@ _PROCESS_RUN_ID = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 _ALERT_DEDUPE_TTL_SECONDS = 300.0
 _LAST_ALERT_TIMES: dict[str, float] = {}
 _CONNECTIVITY_LOST = False
-_4H_SECONDS = 4 * 60 * 60
+_INTERVAL_SECONDS = {
+    "1m": 60,
+    "5m": 5 * 60,
+    "15m": 15 * 60,
+    "1h": 60 * 60,
+    "4h": 4 * 60 * 60,
+    "1d": 24 * 60 * 60,
+}
+_4H_SECONDS = _INTERVAL_SECONDS["4h"]
 DEFAULT_LOOP_INTERVAL_MINUTES = 240.0
 DEFAULT_PENDING_ORDER_MAX_AGE_MINUTES = 240.0
 HIGH_FUNDING_RATE_THRESHOLD = 0.0005
@@ -120,13 +128,38 @@ _SELL_ACTION_TYPES = frozenset({
 
 # ── Time helpers ──────────────────────────────────────────────────────────────
 
-def next_4h_candle_close(now: Optional[datetime] = None) -> datetime:
-    """Return the next UTC 4h candle close after *now* (00:00/04:00/08:00/...)."""
+def interval_to_seconds(interval: Optional[str]) -> int:
+    """Return seconds for a supported HL bar interval, defaulting to legacy 4h."""
+    return _INTERVAL_SECONDS.get(str(interval or "4h"), _4H_SECONDS)
+
+
+def configured_bar_interval(config: BotConfig) -> str:
+    """Return the bar interval used by live candle scheduling and HL candles."""
+    hl_interval = (config.hl or {}).get("bar_interval")
+    data_interval = (config.data or {}).get("bar_interval")
+    return str(hl_interval or data_interval or "4h")
+
+
+def next_candle_close(interval: str = "4h", now: Optional[datetime] = None) -> datetime:
+    """Return the next UTC candle close after *now* for the configured interval."""
     if now is None:
         now = datetime.now(timezone.utc)
+    interval_seconds = interval_to_seconds(interval)
     epoch_seconds = now.timestamp()
-    next_boundary = (int(epoch_seconds // _4H_SECONDS) + 1) * _4H_SECONDS
+    next_boundary = (int(epoch_seconds // interval_seconds) + 1) * interval_seconds
     return datetime.fromtimestamp(next_boundary, tz=timezone.utc)
+
+
+def format_next_candle_close_log(interval: str, target: datetime, wait_secs: float) -> str:
+    return f"Next {interval} candle close at {target.isoformat()} ({wait_secs:.0f}s away)"
+
+
+def format_candle_closed_log(interval: str, target: datetime) -> str:
+    return f"{interval} candle closed at {target.isoformat()} — running decision engine"
+
+def next_4h_candle_close(now: Optional[datetime] = None) -> datetime:
+    """Return the next UTC 4h candle close after *now* (00:00/04:00/08:00/...)."""
+    return next_candle_close("4h", now)
 
 
 # ── Startup / shutdown ────────────────────────────────────────────────────────
@@ -787,7 +820,7 @@ def _snapshot_position_qty(snapshot, coin: str) -> Optional[float]:  # noqa: ANN
     return position.qty if position is not None else 0.0
 
 
-# ── Main decision cycle (4h candle close) ─────────────────────────────────────
+# ── Main decision cycle (configured candle close) ─────────────────────────────
 
 def run_decision_cycle(
     config: BotConfig,
@@ -814,12 +847,12 @@ def run_decision_cycle(
     """
     hl_cfg   = config.hl or {}
     coin     = hl_cfg.get("coin", "BTC")
-    interval = hl_cfg.get("bar_interval", "4h")
+    interval = configured_bar_interval(config)
     notifier = notifier or build_telegram_notifier(config)
 
     # a. Fetch candle history
     history_bars = int(config.data.get("required_history_days", 120))
-    interval_hours = {"1m": 1/60, "5m": 5/60, "15m": 0.25, "1h": 1.0, "4h": 4.0, "1d": 24.0}.get(interval, 4.0)
+    interval_hours = interval_to_seconds(interval) / 3600.0
     lookback_ms = int(history_bars * interval_hours * 3600 * 1000)
     now_ms = int(time.time() * 1000)
     df = fetch_ohlcv_hl(coin, interval, now_ms - lookback_ms, now_ms, client)
@@ -1995,10 +2028,11 @@ def main(
                 _log.warning("Recurring loop returned terminal status %s; stopping", status)
             return
 
+        candle_interval = configured_bar_interval(config)
         while not _STOP_EVENT.is_set():
-            target = next_4h_candle_close()
+            target = next_candle_close(candle_interval)
             wait_secs = (target - datetime.now(timezone.utc)).total_seconds()
-            _log.info("Next 4h candle close at %s (%.0fs away)", target.isoformat(), wait_secs)
+            _log.info(format_next_candle_close_log(candle_interval, target, wait_secs))
 
             deadline = time.monotonic() + wait_secs
             while time.monotonic() < deadline and not _STOP_EVENT.is_set():
@@ -2007,7 +2041,7 @@ def main(
             if _STOP_EVENT.is_set():
                 break
 
-            _log.info("4h candle closed at %s — running decision engine", target.isoformat())
+            _log.info(format_candle_closed_log(candle_interval, target))
             try:
                 status = run_decision_cycle(
                     config, state, state_path, client,

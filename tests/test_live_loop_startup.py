@@ -22,7 +22,11 @@ import pytest
 from scripts.run_live_hl import (
     CONTINUE,
     STOPPED,
+    configured_bar_interval,
     emit_heartbeat,
+    format_candle_closed_log,
+    format_next_candle_close_log,
+    next_candle_close,
     next_4h_candle_close,
     run_recurring_loop,
     run_intraday_monitor,
@@ -131,6 +135,42 @@ def test_next_4h_candle_close_boundary_values():
     nxt = next_4h_candle_close(exactly_midnight)
     assert nxt > exactly_midnight
     assert int(nxt.timestamp()) % (4 * 3600) == 0
+
+
+def test_next_candle_close_respects_1h_interval():
+    now = datetime(2026, 6, 1, 0, 30, 0, tzinfo=timezone.utc)
+
+    nxt = next_candle_close("1h", now)
+
+    assert nxt == datetime(2026, 6, 1, 1, 0, 0, tzinfo=timezone.utc)
+
+
+def test_configured_bar_interval_uses_hype_soak_1h(monkeypatch):
+    monkeypatch.setenv("HL_TESTNET_ACCOUNT_ADDRESS", TESTNET_WALLET)
+
+    cfg = load_config("config/hype_testnet_soak.yaml")
+
+    assert configured_bar_interval(cfg) == "1h"
+
+
+def test_configured_bar_interval_keeps_btc_configs_4h(monkeypatch):
+    monkeypatch.setenv("HL_TESTNET_ACCOUNT_ADDRESS", TESTNET_WALLET)
+
+    realistic = load_config("config/btc_testnet_realistic_probe.yaml")
+    soak = load_config("config/btc_testnet_soak.yaml")
+
+    assert configured_bar_interval(realistic) == "4h"
+    assert configured_bar_interval(soak) == "4h"
+
+
+def test_candle_close_log_format_uses_selected_interval():
+    target = datetime(2026, 6, 1, 1, 0, 0, tzinfo=timezone.utc)
+
+    next_msg = format_next_candle_close_log("1h", target, 60.0)
+    closed_msg = format_candle_closed_log("1h", target)
+
+    assert next_msg.startswith("Next 1h candle close at 2026-06-01T01:00:00+00:00")
+    assert closed_msg.startswith("1h candle closed at 2026-06-01T01:00:00+00:00")
 
 
 def test_startup_checks_returns_key_when_valid():
