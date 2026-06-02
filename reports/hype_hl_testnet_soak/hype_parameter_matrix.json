@@ -1,0 +1,202 @@
+{
+  "base_config": "config/hype_testnet_soak.yaml",
+  "generated_configs": {
+    "aggressive": "config/hype_candidate_aggressive.yaml",
+    "conservative": "config/hype_candidate_conservative.yaml",
+    "normal": "config/hype_candidate_normal.yaml"
+  },
+  "matrix": [
+    {
+      "aggressive": 0.55,
+      "conservative": 0.25,
+      "current_soak": 0.6,
+      "normal": 0.4,
+      "parameter": "entry.starter.exposure_pct"
+    },
+    {
+      "aggressive": true,
+      "conservative": true,
+      "current_soak": false,
+      "normal": true,
+      "parameter": "entry.starter.require_close_above_ma20"
+    },
+    {
+      "aggressive": 0.15,
+      "conservative": 0.05,
+      "current_soak": 1.0,
+      "normal": 0.08,
+      "parameter": "entry.starter.max_distance_above_ma10_pct"
+    },
+    {
+      "aggressive": 0.15,
+      "conservative": 0.05,
+      "current_soak": 1.0,
+      "normal": 0.08,
+      "parameter": "entry.starter.max_distance_above_ma20_pct"
+    },
+    {
+      "aggressive": 0.08,
+      "conservative": 0.03,
+      "current_soak": 1.0,
+      "normal": 0.05,
+      "parameter": "entry.starter.max_intraday_gain_pct"
+    },
+    {
+      "aggressive": 0.8,
+      "conservative": 1.2,
+      "current_soak": 0.0,
+      "normal": 1.0,
+      "parameter": "entry.starter.min_volume_vs_20d_avg"
+    },
+    {
+      "aggressive": 0.06,
+      "conservative": 0.02,
+      "current_soak": 1.0,
+      "normal": 0.04,
+      "parameter": "entry.starter.max_gap_up_pct"
+    },
+    {
+      "aggressive": true,
+      "conservative": true,
+      "current_soak": false,
+      "normal": true,
+      "parameter": "add.enabled"
+    },
+    {
+      "aggressive": 4,
+      "conservative": 2,
+      "current_soak": 0,
+      "normal": 3,
+      "parameter": "add.max_add_count"
+    },
+    {
+      "aggressive": 1,
+      "conservative": 2,
+      "current_soak": 999,
+      "normal": 1,
+      "parameter": "add.min_days_after_entry_before_first_add"
+    },
+    {
+      "aggressive": 1,
+      "conservative": 3,
+      "current_soak": 999,
+      "normal": 2,
+      "parameter": "add.min_days_between_adds"
+    },
+    {
+      "aggressive": 0.03,
+      "conservative": 0.08,
+      "current_soak": 1.0,
+      "normal": 0.05,
+      "parameter": "add.min_unrealized_profit_before_first_add_pct"
+    },
+    {
+      "aggressive": 0.05,
+      "conservative": 0.08,
+      "current_soak": 1.0,
+      "normal": 0.06,
+      "parameter": "add.add_trigger_pct"
+    },
+    {
+      "aggressive": [
+        0.15,
+        0.12,
+        0.08,
+        0.05
+      ],
+      "conservative": [
+        0.05,
+        0.03
+      ],
+      "current_soak": [],
+      "normal": [
+        0.1,
+        0.075,
+        0.05
+      ],
+      "parameter": "add.add_sizes_pct"
+    },
+    {
+      "aggressive": true,
+      "conservative": true,
+      "current_soak": false,
+      "normal": true,
+      "parameter": "add.require_close_above_ma10"
+    },
+    {
+      "aggressive": true,
+      "conservative": true,
+      "current_soak": false,
+      "normal": true,
+      "parameter": "add.require_ma10_above_ma20"
+    },
+    {
+      "aggressive": true,
+      "conservative": true,
+      "current_soak": false,
+      "normal": true,
+      "parameter": "add.require_price_above_last_add_price"
+    },
+    {
+      "aggressive": 0.08,
+      "conservative": 0.03,
+      "current_soak": 1.0,
+      "normal": 0.05,
+      "parameter": "add.forbid_add_if_intraday_gain_above_pct"
+    },
+    {
+      "aggressive": 0.12,
+      "conservative": 0.05,
+      "current_soak": 1.0,
+      "normal": 0.08,
+      "parameter": "add.forbid_add_if_distance_above_ma10_pct"
+    },
+    {
+      "aggressive": 0.15,
+      "conservative": 0.05,
+      "current_soak": 1.0,
+      "normal": 0.08,
+      "parameter": "add.forbid_add_if_distance_above_ma20_pct"
+    },
+    {
+      "aggressive": 0.8,
+      "conservative": 0.3,
+      "current_soak": 0.8,
+      "normal": 0.5,
+      "parameter": "capital.max_symbol_exposure_pct"
+    },
+    {
+      "aggressive": 0.6,
+      "conservative": 0.25,
+      "current_soak": 0.6,
+      "normal": 0.4,
+      "parameter": "capital.max_initial_exposure_pct"
+    },
+    {
+      "aggressive": 0.55,
+      "conservative": 0.25,
+      "current_soak": 0.6,
+      "normal": 0.35,
+      "parameter": "capital.max_starter_exposure_pct"
+    },
+    {
+      "aggressive": 0.2,
+      "conservative": 0.05,
+      "current_soak": 0.2,
+      "normal": 0.1,
+      "parameter": "capital.max_addon_exposure_pct"
+    },
+    {
+      "aggressive": 0.05,
+      "conservative": 0.015,
+      "current_soak": 0.03,
+      "normal": 0.03,
+      "parameter": "capital.max_total_capital_at_risk_pct"
+    }
+  ],
+  "production_readiness_scores": {
+    "aggressive": 62,
+    "conservative": 91,
+    "normal": 84
+  }
+}

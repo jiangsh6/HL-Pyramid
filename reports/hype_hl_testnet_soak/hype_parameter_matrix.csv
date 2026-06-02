@@ -1,0 +1,26 @@
+parameter,current_soak,aggressive,normal,conservative
+entry.starter.exposure_pct,0.6,0.55,0.4,0.25
+entry.starter.require_close_above_ma20,False,True,True,True
+entry.starter.max_distance_above_ma10_pct,1.0,0.15,0.08,0.05
+entry.starter.max_distance_above_ma20_pct,1.0,0.15,0.08,0.05
+entry.starter.max_intraday_gain_pct,1.0,0.08,0.05,0.03
+entry.starter.min_volume_vs_20d_avg,0.0,0.8,1.0,1.2
+entry.starter.max_gap_up_pct,1.0,0.06,0.04,0.02
+add.enabled,False,True,True,True
+add.max_add_count,0,4,3,2
+add.min_days_after_entry_before_first_add,999,1,1,2
+add.min_days_between_adds,999,1,2,3
+add.min_unrealized_profit_before_first_add_pct,1.0,0.03,0.05,0.08
+add.add_trigger_pct,1.0,0.05,0.06,0.08
+add.add_sizes_pct,[],"[0.15, 0.12, 0.08, 0.05]","[0.1, 0.075, 0.05]","[0.05, 0.03]"
+add.require_close_above_ma10,False,True,True,True
+add.require_ma10_above_ma20,False,True,True,True
+add.require_price_above_last_add_price,False,True,True,True
+add.forbid_add_if_intraday_gain_above_pct,1.0,0.08,0.05,0.03
+add.forbid_add_if_distance_above_ma10_pct,1.0,0.12,0.08,0.05
+add.forbid_add_if_distance_above_ma20_pct,1.0,0.15,0.08,0.05
+capital.max_symbol_exposure_pct,0.8,0.8,0.5,0.3
+capital.max_initial_exposure_pct,0.6,0.6,0.4,0.25
+capital.max_starter_exposure_pct,0.6,0.55,0.35,0.25
+capital.max_addon_exposure_pct,0.2,0.2,0.1,0.05
+capital.max_total_capital_at_risk_pct,0.03,0.05,0.03,0.015

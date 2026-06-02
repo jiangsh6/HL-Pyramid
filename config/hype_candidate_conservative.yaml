@@ -1,0 +1,242 @@
+bot:
+  name: hype_candidate_conservative
+  version: '0.2'
+  mode: testnet
+  timezone: UTC
+symbol:
+  ticker: HYPE
+  asset_type: perpetual
+  direction: long_only
+  allow_short: false
+thesis:
+  enabled: true
+  thesis_name: HYPE conservative production candidate
+  thesis_start_date: '2026-01-01'
+  target_price: 200000
+  manual_override_required_after_expiry: true
+capital:
+  starting_equity: 900
+  max_total_capital_at_risk_pct: 0.015
+  max_symbol_exposure_pct: 0.3
+  max_initial_exposure_pct: 0.25
+  max_starter_exposure_pct: 0.25
+  max_addon_exposure_pct: 0.05
+  reserve_cash_pct: 0.2
+probe:
+  default_base_qty: 0.005
+  default_addon_qty: 0.002
+  runner_pct: 0.5
+  min_probe_qty_multiplier: 5
+  starter_pricing_mode: aggressive
+  starter_aggressiveness_bps: 5
+  max_oracle_deviation_bps: 20
+  max_aggressiveness_bps: 20
+leverage:
+  enabled: false
+  max_leverage: 1.0
+  max_leverage_with_profit_cushion: 1.0
+  profit_cushion_required_pct: 0.1
+  earnings_week_max_leverage: 1.0
+  force_deleverage_before_event: false
+entry:
+  mode: starter_pullback_breakout
+  starter:
+    enabled: true
+    exposure_pct: 0.25
+    require_thesis_enabled: true
+    require_close_above_ma20: true
+    max_distance_above_ma10_pct: 0.05
+    max_distance_above_ma20_pct: 0.05
+    max_intraday_gain_pct: 0.03
+    min_volume_vs_20d_avg: 1.2
+    max_gap_up_pct: 0.02
+  pullback_base:
+    enabled: false
+    additional_exposure_pct: 0.0
+    require_close_above_ma20: false
+    require_ma20_above_ma50: false
+    min_drawdown_from_20d_high_pct: 0.0
+    max_drawdown_from_20d_high_pct: 1.0
+    require_reclaim_ma5: false
+    require_reclaim_ma10: false
+    max_down_volume_vs_20d_avg: 99.0
+  breakout_base:
+    enabled: false
+    additional_exposure_pct: 0.0
+    require_close_above_20d_high: false
+    require_close_above_ma10: false
+    require_ma10_above_ma20: false
+    require_ma20_above_ma50: false
+    min_volume_vs_20d_avg: 0.0
+    max_distance_above_ma10_pct: 1.0
+    max_intraday_gain_pct: 1.0
+add:
+  enabled: true
+  max_add_count: 2
+  min_days_after_entry_before_first_add: 2
+  min_days_between_adds: 3
+  min_unrealized_profit_before_first_add_pct: 0.08
+  add_trigger_type: price_step
+  add_trigger_pct: 0.08
+  add_sizes_pct:
+  - 0.05
+  - 0.03
+  require_close_above_ma10: true
+  require_ma10_above_ma20: true
+  require_price_above_last_add_price: true
+  forbid_add_if_intraday_gain_above_pct: 0.03
+  forbid_add_if_distance_above_ma10_pct: 0.05
+  forbid_add_if_distance_above_ma20_pct: 0.05
+  stop_adding_if_event_within_trading_days: 0
+reduce:
+  enabled: false
+  addon_reduce:
+    reduce_latest_add_if_close_below_ma5: false
+    reduce_all_addons_if_close_below_ma10: false
+    reduce_all_addons_if_drawdown_from_peak_pct: 1.0
+  base_reduce:
+    reduce_base_half_if_close_below_ma20: false
+    reduce_base_half_if_drawdown_from_peak_pct: 1.0
+    reduce_base_all_if_close_below_ma50: false
+take_profit:
+  enabled: false
+  mode: hybrid_lifo
+  layered_profit:
+    enabled: false
+    levels:
+    - trigger_profit_pct_from_avg_entry: 0.3
+      reduce_pct_of_total_position: 0.1
+      reduce_priority: addons_first
+      move_stop_to: breakeven
+  target_price:
+    enabled: false
+    reduce_pct_of_remaining_position: 0.5
+    final_action: enter_runner_mode
+  runner_mode:
+    enabled: false
+    runner_position_pct_of_original_base: 0.5
+    trailing_stop_pct: 0.08
+  exposure_take_profit:
+    enabled: false
+    soft_exposure_cap_pct: 1.0
+    hard_exposure_cap_pct: 1.0
+    reduce_to_exposure_pct: 1.0
+  profit_giveback:
+    enabled: false
+    tiers:
+    - min_unrealized_profit_pct_of_equity: 1.0
+      max_giveback_pct: 1.0
+  trailing_take_profit:
+    enabled: false
+    tiers:
+    - min_profit_pct_from_avg_entry: 1.0
+      trailing_pct: 1.0
+      action: reduce_addons_50pct
+risk:
+  initial_stop:
+    type: max_of_pct_or_atr
+    stop_pct: 0.15
+    atr_multiplier: 2.5
+  trailing_stop:
+    enabled: true
+    default_trailing_pct: 0.15
+    profit_tiers:
+    - min_profit_pct: 0.2
+      trailing_pct: 0.12
+  max_loss:
+    max_thesis_loss_pct_of_equity: 0.06
+    max_daily_loss_pct_of_equity: 0.03
+    max_intraday_drawdown_pct_of_equity: 0.04
+  no_trade_conditions:
+    max_intraday_gain_for_new_entry_pct: 1.0
+    max_intraday_loss_before_halt_pct: 1.0
+    max_gap_down_before_halt_pct: 1.0
+    max_spread_bps: 100
+    min_avg_daily_dollar_volume: 0
+event_risk:
+  enabled: false
+  use_calendar_days: true
+  stop_new_entry_trading_days_before: 0
+  stop_adding_trading_days_before: 0
+  reduce_to_max_exposure_trading_days_before: 0
+  max_exposure_before_event_pct: 1.0
+  reduce_to_core_trading_days_before: 0
+  core_exposure_before_event_pct: 1.0
+  force_flat_before_event: false
+  force_flat_trading_days_before: 0
+  post_event:
+    cooldown_trading_days: 0
+    require_new_trend_confirmation: false
+    reset_add_count: false
+execution:
+  broker: hyperliquid_testnet
+  order_type: limit
+  limit_offset_bps: 1
+  max_slippage_bps: 25
+  allow_market_order: false
+  market_order_allowed_for_stop_exit: false
+  order_timeout_seconds: 30
+  retry_count: 0
+  retry_delay_seconds: 0
+  partial_fill_policy: accept_partial_then_reprice
+  one_cycle_only: false
+  allow_mainnet: false
+  exit_price_aggressiveness_bps: 2
+  max_oracle_deviation_bps: 5
+  use_ioc_for_cleanup_exit: false
+data:
+  source: hyperliquid
+  bar_interval: 1h
+  intraday_check_interval_minutes: 15
+  use_adjusted_close: false
+  required_history_days: 120
+  indicators:
+    ma_windows:
+    - 5
+    - 10
+    - 20
+    - 50
+    atr_window: 14
+    volume_window: 20
+    high_breakout_window: 20
+logging:
+  run_dir: reports/hype_hl_testnet_soak
+  write_orders_csv: true
+  write_positions_csv: true
+  write_risk_csv: true
+  write_state_json: true
+  write_daily_summary: true
+notifications:
+  enabled: true
+  telegram_enabled: true
+  heartbeat_enabled: true
+  trade_alerts_enabled: true
+  decision_alerts_enabled: true
+  summary_alerts_enabled: true
+  weekly_summary_enabled: false
+  notify_on:
+  - halt
+  - entry
+  - add
+  - reduce
+  - take_profit
+  - stop
+  - event_risk_mode
+  - loop
+hl:
+  network: testnet
+  coin: HYPE
+  bar_interval: 1h
+  wallet_address: ENV
+  wallet_env_var: HL_TESTNET_ACCOUNT_ADDRESS
+  key_env_var: HL_TESTNET_AGENT_PRIVATE_KEY
+  collateral_mode: unified
+  sz_decimals: 5
+  min_size: 0.001
+  dust_policy:
+    enabled: true
+    dust_qty_threshold: 0.001
+    dust_notional_threshold_usd: 10
+    action: halt_and_operator_review
+    allow_reduce_only_dust_close: false
+    allow_round_up_to_min_size_for_reduce_only: false
