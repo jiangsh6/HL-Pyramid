@@ -4,7 +4,7 @@ import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import pandas as pd
 
@@ -134,6 +134,7 @@ def run_research_backtest(
     run_dir: Path,
     run_id: str,
     slippage_bps: float = 1.0,
+    data_quality: Optional[Mapping[str, Any]] = None,
 ) -> ResearchBacktestResult:
     if len(df) < 55:
         raise ValueError("insufficient_history_for_backtest")
@@ -294,6 +295,17 @@ def run_research_backtest(
         "slippage_bps": slippage_bps,
         "output_dir": str(run_dir),
     })
+    if data_quality:
+        summary.update(dict(data_quality))
+    else:
+        summary.update({
+            "data_quality_warning_count": 0,
+            "largest_bar_return": 0.0,
+            "largest_gap": 0.0,
+            "largest_range": 0.0,
+            "first_flagged_timestamp": None,
+            "flagged_candles_policy": "not_audited",
+        })
 
     write_backtest_outputs(
         run_dir=run_dir,

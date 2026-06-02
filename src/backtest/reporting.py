@@ -60,5 +60,15 @@ def format_backtest_report(summary: dict[str, Any]) -> str:
         "average_readiness_score",
     ):
         lines.append(f"- `{key}`: {summary.get(key)}")
+    lines.extend(["", "## Data Quality"])
+    for key in (
+        "data_quality_warning_count",
+        "largest_bar_return",
+        "largest_gap",
+        "largest_range",
+        "first_flagged_timestamp",
+        "flagged_candles_policy",
+    ):
+        lines.append(f"- `{key}`: {summary.get(key)}")
     lines.extend(["", "## Known Scope", "Starter entry, add logic, and stop infrastructure only."])
     return "\n".join(lines) + "\n"
