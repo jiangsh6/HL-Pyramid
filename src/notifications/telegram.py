@@ -305,6 +305,25 @@ def format_event(event: Mapping[str, Any]) -> str:
             *_run_block(event),
         ])
 
+    if event_type == "strategy_audit":
+        return "\n".join([
+            "🧪 HYPE Strategy Audit" if _value(event.get("coin")) == "HYPE" else "🧪 HL Strategy Audit",
+            "",
+            _label_line("Parameters Reviewed", event.get("parameters_reviewed")),
+            _label_line("Warnings", event.get("warning_count")),
+            "",
+            _label_line("Most Permissive", event.get("most_permissive")),
+            _label_line("Most Restrictive", event.get("most_restrictive")),
+            "",
+            _label_line("Current Signal", event.get("current_signal")),
+            _label_line("Readiness", event.get("readiness_score")),
+            "",
+            _label_line("Audit Report", event.get("report_path")),
+            "",
+            _label_line("Timestamp", timestamp),
+            *_run_block(event),
+        ])
+
     if event_type == "weekly_summary":
         return "\n".join([
             "📅 HL Weekly Summary",
