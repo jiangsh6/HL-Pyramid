@@ -269,6 +269,42 @@ def format_event(event: Mapping[str, Any]) -> str:
             *_run_block(event),
         ])
 
+    if event_type == "signal_check":
+        passing = event.get("passing") or []
+        blocking = event.get("blocking") or []
+        passing_lines = [f"✅ {item}" for item in passing[:5]] or ["-"]
+        blocking_lines = [f"❌ {item}" for item in blocking[:5]] or ["-"]
+        return "\n".join([
+            "🧭 HYPE Signal Check" if _value(event.get("coin")) == "HYPE" else "🧭 HL Signal Check",
+            "",
+            _label_line("State", event.get("state")),
+            "",
+            "Action:",
+            _value(event.get("action")),
+            "",
+            "Readiness:",
+            f"{_value(event.get('readiness_score'))}/100",
+            "",
+            "Closest Trigger:",
+            _value(event.get("closest_trigger")),
+            f"Needs {_value(event.get('closest_trigger_distance'))}",
+            "",
+            "Passing:",
+            *passing_lines,
+            "",
+            "Blocking:",
+            *blocking_lines,
+            "",
+            "Risk:",
+            f"${_value(event.get('risk_budget_remaining'))} remaining of ${_value(event.get('max_risk'))}",
+            "",
+            "Next Check:",
+            "1h" if _value(event.get("coin")) == "HYPE" else "-",
+            "",
+            _label_line("Timestamp", timestamp),
+            *_run_block(event),
+        ])
+
     if event_type == "weekly_summary":
         return "\n".join([
             "📅 HL Weekly Summary",

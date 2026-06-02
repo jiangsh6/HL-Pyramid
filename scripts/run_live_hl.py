@@ -40,6 +40,7 @@ from src.core.models import (
     BotState,
     Decision,
     Fill,
+    IndicatorSnapshot,
     OrderResult,
     OrderResultStatus,
     PendingOrder,
@@ -71,6 +72,11 @@ from src.notifications.telegram import (
 )
 from src.reporting.daily_summary import format_summary
 from src.reporting.logger import log_cycle
+from src.reporting.signal_diagnostics import (
+    build_signal_diagnostics,
+    format_signal_check_event,
+    write_signal_diagnostics,
+)
 from src.reporting.state_writer import (
     apply_fill,
     load_state_or_halt,
@@ -466,7 +472,7 @@ def _coin(config: BotConfig, fallback: str = "BTC") -> str:
 
 def _dedupe_key(event: dict) -> Optional[str]:
     event_type = str(event.get("type") or "event")
-    if event_type in {"heartbeat"}:
+    if event_type in {"heartbeat", "signal_check"}:
         return None
     return "|".join(
         str(event.get(key) or "")
@@ -737,6 +743,23 @@ def _notify_summary(
     )
 
 
+def _notify_signal_check(
+    *,
+    config: BotConfig,
+    notifier: TelegramNotifier,
+    diagnostics: dict,
+    interval: str,
+) -> None:
+    if _coin(config) != "HYPE" or interval != "1h":
+        return
+    _notify_if_enabled(
+        config=config,
+        notifier=notifier,
+        toggle="decision_alerts_enabled",
+        event=format_signal_check_event(diagnostics),
+    )
+
+
 def _weekly_summary_state_path(config: BotConfig) -> Path:
     run_dir = Path(config.logging.get("run_dir", "reports/btc_hl_testnet"))
     return run_dir / "telegram_weekly_summary_state.json"
@@ -818,6 +841,46 @@ def _snapshot_position_qty(snapshot, coin: str) -> Optional[float]:  # noqa: ANN
         return None
     position = next((pos for pos in snapshot.positions if pos.coin == coin), None)
     return position.qty if position is not None else 0.0
+
+
+def _log_signal_diagnostics_safely(
+    *,
+    config: BotConfig,
+    state: ThesisState,
+    decision: Decision,
+    indicators: IndicatorSnapshot,
+    coin: str,
+    interval: str,
+    notifier: TelegramNotifier,
+    hl_snapshot=None,  # noqa: ANN001
+) -> None:
+    try:
+        run_dir = config.logging.get("run_dir", "reports/btc_hl_testnet")
+        diagnostics = build_signal_diagnostics(
+            run_id=_run_id(config),
+            coin=coin,
+            network=_network(config),
+            state=state,
+            decision=decision,
+            indicators=indicators,
+            config=config,
+            exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
+            collateral_available=(
+                hl_snapshot.effective_trading_collateral if hl_snapshot is not None else None
+            ),
+            trading_collateral_available=(
+                hl_snapshot.trading_collateral_available if hl_snapshot is not None else None
+            ),
+        )
+        write_signal_diagnostics(run_dir, diagnostics)
+        _notify_signal_check(
+            config=config,
+            notifier=notifier,
+            diagnostics=diagnostics,
+            interval=interval,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("signal_diagnostics_failed=true error_type=%s", type(exc).__name__)
 
 
 # ── Main decision cycle (configured candle close) ─────────────────────────────
@@ -1033,6 +1096,16 @@ def run_decision_cycle(
         dry_run=dry_run,
         state=state,
         exchange_position_qty=_snapshot_position_qty(hl_snapshot, coin),
+    )
+    _log_signal_diagnostics_safely(
+        config=config,
+        state=state,
+        decision=decision,
+        indicators=indicators,
+        coin=coin,
+        interval=interval,
+        notifier=notifier,
+        hl_snapshot=hl_snapshot,
     )
     if decision.action == ActionType.SELL_TAKE_PROFIT:
         _notify_semantic(
