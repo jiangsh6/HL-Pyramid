@@ -106,7 +106,7 @@ Ready-for-mainnet checks:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Print HYPE paper-trade progress from local CSV logs")
-    parser.add_argument("--run-dir", default=str(DEFAULT_RUN_DIR))
+    parser.add_argument("--run-dir", "--state-dir", dest="run_dir", default=str(DEFAULT_RUN_DIR))
     parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR))
     args = parser.parse_args(argv)
     print(build_progress_report(Path(args.run_dir), Path(args.data_dir)))
