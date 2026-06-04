@@ -1,0 +1,52 @@
+bot:
+  name: hype_paper_trade_starter_only
+  version: "1.0"
+  mode: testnet
+  notes: |
+    Locked configuration based on backtest v1.1 winner (p1_1d_local_stop1.5).
+    DO NOT TUNE during paper trade phase. Tuning on 10-trend sample is overfitting.
+    Sample collection only. Re-evaluate after effective_sample_size >= 15 trends.
+
+symbol:
+  ticker: HYPE
+  asset_type: perpetual
+  direction: long_only
+
+capital:
+  initial_equity: 1500
+  max_thesis_risk_pct: 0.01
+
+entry:
+  mode: starter_only
+  condition: close_above_ma100
+  fill: next_bar_open
+
+risk:
+  stop_type: atr
+  stop_atr_multiplier: 1.5
+  atr_window: 14
+
+exit:
+  condition: close_below_ma100
+  fill: next_bar_open
+
+add:
+  enabled: false
+
+runner:
+  enabled: false
+
+take_profit:
+  enabled: false
+
+data:
+  source: hyperliquid
+  network: testnet
+  bar_interval: 1d
+
+logging:
+  run_dir: logs/paper_trade
+  write_orders_csv: true
+  write_positions_csv: true
+  write_fills_csv: true
+  write_funding_csv: true

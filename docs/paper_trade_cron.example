@@ -1,0 +1,2 @@
+# 每天 UTC 00:30 拉最新数据
+30 0 * * * cd /path/to/HL\ Primiding && python scripts/cron_fetch_hype_data.py >> logs/cron.log 2>&1
